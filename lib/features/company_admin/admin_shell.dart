@@ -5,6 +5,7 @@ import 'dashboard_screen.dart';
 import 'campaign_screen.dart';
 import 'user_management_screen.dart';
 import 'csv_upload_screen.dart';
+import 'form_builder_screen.dart';
 import 'campaign_settings_screen.dart';
 
 /// Single persistent shell for all Company Admin screens.
@@ -12,12 +13,19 @@ import 'campaign_settings_screen.dart';
 class AdminShell extends StatefulWidget {
   const AdminShell({super.key});
 
+  /// Global key — lets any widget call [AdminShellState.navigateTo].
+  static final GlobalKey<AdminShellState> shellKey =
+      GlobalKey<AdminShellState>();
+
   @override
-  State<AdminShell> createState() => _AdminShellState();
+  State<AdminShell> createState() => AdminShellState();
 }
 
-class _AdminShellState extends State<AdminShell> {
+class AdminShellState extends State<AdminShell> {
   int _selectedIndex = 0;
+
+  /// Programmatically switch to any tab by index.
+  void navigateTo(int index) => setState(() => _selectedIndex = index);
 
   @override
   Widget build(BuildContext context) {
@@ -35,12 +43,13 @@ class _AdminShellState extends State<AdminShell> {
             child: IndexedStack(
               index: _selectedIndex,
               children: const [
-                DashboardContent(),          // index 0 — Dashboard
-                CampaignContent(),           // index 1 — Campaigns
-                UserManagementContent(),     // index 2 — Users
-                CsvUploadContent(),          // index 3 — CSV Upload
-                SizedBox.shrink(),           // index 4 — Settings (placeholder)
-                CampaignSettingsContent(),   // index 5 — Disposition (temp)
+                DashboardContent(),         // index 0 — Dashboard
+                CampaignContent(),          // index 1 — Campaigns
+                UserManagementContent(),    // index 2 — Users
+                CsvUploadContent(),         // index 3 — CSV Upload
+                SizedBox.shrink(),          // index 4 — Settings (placeholder)
+                FormBuilderContent(),       // index 5 — Form Builder
+                CampaignSettingsContent(),  // index 6 — Campaign Settings
               ],
             ),
           ),

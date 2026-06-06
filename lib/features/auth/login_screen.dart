@@ -52,7 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = false);
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const AdminShell()),
+      MaterialPageRoute(builder: (_) => AdminShell(key: AdminShell.shellKey)),
     );
   }
 

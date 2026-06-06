@@ -47,12 +47,18 @@ class _CanvasField {
     required this.type,
     required this.label,
     this.required = false,
-  }) : id = UniqueKey();
+    List<String>? options,
+  })  : id = UniqueKey(),
+        options = options ?? [];
 
   final Key id;
   final _FieldType type;
   String label;
   bool required;
+  List<String> options;
+
+  bool get hasOptions =>
+      type.label == 'Dropdown' || type.label == 'Radio Button';
 }
 
 // ─────────────────────────────────────────────
@@ -73,9 +79,15 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
     _CanvasField(
         type: _kFieldTypes[1], label: 'Monthly Income', required: false),
     _CanvasField(
-        type: _kFieldTypes[2], label: 'City', required: true),
+        type: _kFieldTypes[2],
+        label: 'City',
+        required: true,
+        options: ['Lucknow', 'Delhi', 'Mumbai']),
     _CanvasField(
-        type: _kFieldTypes[3], label: 'Interest Level', required: true),
+        type: _kFieldTypes[3],
+        label: 'Interest Level',
+        required: true,
+        options: ['High', 'Medium', 'Low']),
   ];
 
   void _addField(_FieldType type) {
@@ -100,6 +112,13 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
     f.label = newLabel;
   }
 
+  void _updateOptions(Key id, List<String> opts) {
+    setState(() {
+      final f = _fields.firstWhere((f) => f.id == id);
+      f.options = opts;
+    });
+  }
+
   void _reorder(int oldIndex, int newIndex) {
     setState(() {
       if (newIndex > oldIndex) newIndex--;
@@ -122,6 +141,7 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
             onRemove: _removeField,
             onToggleRequired: _toggleRequired,
             onLabelChanged: _updateLabel,
+            onOptionsChanged: _updateOptions,
             onReorder: _reorder,
           ),
         ),
@@ -266,6 +286,7 @@ class _FormCanvas extends StatelessWidget {
     required this.onRemove,
     required this.onToggleRequired,
     required this.onLabelChanged,
+    required this.onOptionsChanged,
     required this.onReorder,
   });
 
@@ -273,6 +294,7 @@ class _FormCanvas extends StatelessWidget {
   final ValueChanged<Key> onRemove;
   final ValueChanged<Key> onToggleRequired;
   final void Function(Key id, String label) onLabelChanged;
+  final void Function(Key id, List<String> opts) onOptionsChanged;
   final void Function(int oldIndex, int newIndex) onReorder;
 
   @override
@@ -317,13 +339,16 @@ class _FormCanvas extends StatelessWidget {
 
         // ── Canvas body ───────────────────────
         Expanded(
-          child: fields.isEmpty ? _EmptyCanvas() : _FieldList(
-            fields: fields,
-            onRemove: onRemove,
-            onToggleRequired: onToggleRequired,
-            onLabelChanged: onLabelChanged,
-            onReorder: onReorder,
-          ),
+          child: fields.isEmpty
+              ? _EmptyCanvas()
+              : _FieldList(
+                  fields: fields,
+                  onRemove: onRemove,
+                  onToggleRequired: onToggleRequired,
+                  onLabelChanged: onLabelChanged,
+                  onOptionsChanged: onOptionsChanged,
+                  onReorder: onReorder,
+                ),
         ),
       ],
     );
@@ -377,6 +402,7 @@ class _FieldList extends StatelessWidget {
     required this.onRemove,
     required this.onToggleRequired,
     required this.onLabelChanged,
+    required this.onOptionsChanged,
     required this.onReorder,
   });
 
@@ -384,6 +410,7 @@ class _FieldList extends StatelessWidget {
   final ValueChanged<Key> onRemove;
   final ValueChanged<Key> onToggleRequired;
   final void Function(Key id, String label) onLabelChanged;
+  final void Function(Key id, List<String> opts) onOptionsChanged;
   final void Function(int oldIndex, int newIndex) onReorder;
 
   @override
@@ -402,6 +429,7 @@ class _FieldList extends StatelessWidget {
           onRemove: () => onRemove(field.id),
           onToggleRequired: () => onToggleRequired(field.id),
           onLabelChanged: (v) => onLabelChanged(field.id, v),
+          onOptionsChanged: (opts) => onOptionsChanged(field.id, opts),
         );
       },
     );
@@ -419,6 +447,7 @@ class _CanvasFieldCard extends StatefulWidget {
     required this.onRemove,
     required this.onToggleRequired,
     required this.onLabelChanged,
+    required this.onOptionsChanged,
   });
 
   final _CanvasField field;
@@ -426,6 +455,7 @@ class _CanvasFieldCard extends StatefulWidget {
   final VoidCallback onRemove;
   final VoidCallback onToggleRequired;
   final ValueChanged<String> onLabelChanged;
+  final ValueChanged<List<String>> onOptionsChanged;
 
   @override
   State<_CanvasFieldCard> createState() => _CanvasFieldCardState();
@@ -434,6 +464,7 @@ class _CanvasFieldCard extends StatefulWidget {
 class _CanvasFieldCardState extends State<_CanvasFieldCard> {
   bool _hovered = false;
   bool _editingLabel = false;
+  bool _optionsExpanded = false;
   late final TextEditingController _labelCtrl;
   final FocusNode _labelFocus = FocusNode();
 
@@ -483,100 +514,134 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
                   color: _kCardShadow, blurRadius: 4, offset: Offset(0, 2)),
             ],
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // ── Drag handle ─────────────────
-              ReorderableDragStartListener(
-                index: widget.index,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.grab,
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Icon(Icons.drag_indicator,
-                        size: 20,
-                        color: _hovered ? _kGrey : _kBorder),
-                  ),
-                ),
-              ),
-
-              // ── Field type icon ──────────────
-              Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  color: _kBlue.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Icon(widget.field.type.icon,
-                    size: 16, color: _kBlue),
-              ),
-              const SizedBox(width: 12),
-
-              // ── Editable label ───────────────
-              Expanded(
-                child: _editingLabel
-                    ? TextField(
-                        controller: _labelCtrl,
-                        focusNode: _labelFocus,
-                        style: _inter(14, weight: FontWeight.w500),
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 6),
-                          border: OutlineInputBorder(),
-                          focusedBorder: OutlineInputBorder(
-                            borderSide:
-                                BorderSide(color: _kBlue, width: 1.5),
-                          ),
-                        ),
-                        onSubmitted: (v) {
-                          setState(() => _editingLabel = false);
-                          widget.onLabelChanged(v);
-                        },
-                      )
-                    : GestureDetector(
-                        onTap: _startEditing,
-                        child: Row(
-                          children: [
-                            Text(widget.field.label,
-                                style: _inter(14,
-                                    weight: FontWeight.w500)),
-                            const SizedBox(width: 6),
-                            Icon(Icons.edit_outlined,
-                                size: 13,
-                                color: _hovered
-                                    ? _kTextLight
-                                    : Colors.transparent),
-                          ],
-                        ),
-                      ),
-              ),
-
-              const SizedBox(width: 16),
-
-              // ── Required toggle ──────────────
+              // ── Label row ────────────────────
               Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('Required',
-                      style: _inter(11, color: _kTextLight)),
-                  const SizedBox(width: 6),
-                  Transform.scale(
-                    scale: 0.78,
-                    child: Switch(
-                      value: widget.field.required,
-                      onChanged: (_) => widget.onToggleRequired(),
-                      activeColor: _kGreen,
-                      materialTapTargetSize:
-                          MaterialTapTargetSize.shrinkWrap,
+                  // ── Drag handle ───────────────
+                  ReorderableDragStartListener(
+                    index: widget.index,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 12),
+                        child: Icon(Icons.drag_indicator,
+                            size: 20,
+                            color: _hovered ? _kGrey : _kBorder),
+                      ),
                     ),
                   ),
+
+                  // ── Field type icon ────────────
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: _kBlue.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Icon(widget.field.type.icon,
+                        size: 16, color: _kBlue),
+                  ),
+                  const SizedBox(width: 12),
+
+                  // ── Editable label ─────────────
+                  Expanded(
+                    child: _editingLabel
+                        ? TextField(
+                            controller: _labelCtrl,
+                            focusNode: _labelFocus,
+                            style: _inter(14, weight: FontWeight.w500),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 6),
+                              border: OutlineInputBorder(),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: _kBlue, width: 1.5),
+                              ),
+                            ),
+                            onSubmitted: (v) {
+                              setState(() => _editingLabel = false);
+                              widget.onLabelChanged(v);
+                            },
+                          )
+                        : GestureDetector(
+                            onTap: _startEditing,
+                            child: Row(
+                              children: [
+                                Text(widget.field.label,
+                                    style: _inter(14,
+                                        weight: FontWeight.w500)),
+                                const SizedBox(width: 6),
+                                Icon(Icons.edit_outlined,
+                                    size: 13,
+                                    color: _hovered
+                                        ? _kTextLight
+                                        : Colors.transparent),
+                              ],
+                            ),
+                          ),
+                  ),
+
+                  const SizedBox(width: 16),
+
+                  // ── Required toggle ────────────
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Required',
+                          style: _inter(11, color: _kTextLight)),
+                      const SizedBox(width: 6),
+                      Transform.scale(
+                        scale: 0.78,
+                        child: Switch(
+                          value: widget.field.required,
+                          onChanged: (_) => widget.onToggleRequired(),
+                          activeColor: _kGreen,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // ── Delete button ──────────────
+                  _DeleteBtn(onTap: widget.onRemove),
                 ],
               ),
 
-              const SizedBox(width: 8),
-
-              // ── Delete button ────────────────
-              _DeleteBtn(onTap: widget.onRemove),
+              // ── Options toggle (Dropdown / Radio only) ──
+              if (widget.field.hasOptions) ...
+                [
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: () => setState(
+                            () => _optionsExpanded = !_optionsExpanded),
+                        child: Text(
+                          'Options (${widget.field.options.length})'
+                          ' ${_optionsExpanded ? '▴' : '▾'}',
+                          style: _inter(11,
+                              color: _kGrey,
+                              weight: FontWeight.w500),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_optionsExpanded)
+                    _OptionsSection(
+                      options: widget.field.options,
+                      onChanged: widget.onOptionsChanged,
+                    ),
+                ],
             ],
           ),
         ),
@@ -622,6 +687,133 @@ class _DeleteBtnState extends State<_DeleteBtn> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Options Section (Dropdown / Radio)
+// ─────────────────────────────────────────────
+class _OptionsSection extends StatefulWidget {
+  const _OptionsSection({
+    required this.options,
+    required this.onChanged,
+  });
+
+  final List<String> options;
+  final ValueChanged<List<String>> onChanged;
+
+  @override
+  State<_OptionsSection> createState() => _OptionsSectionState();
+}
+
+class _OptionsSectionState extends State<_OptionsSection> {
+  final TextEditingController _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _addOption() {
+    final v = _ctrl.text.trim();
+    if (v.isEmpty || widget.options.contains(v)) return;
+    widget.onChanged([...widget.options, v]);
+    _ctrl.clear();
+  }
+
+  void _removeOption(String opt) {
+    widget.onChanged(widget.options.where((o) => o != opt).toList());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FA),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Chip list ──────────────────────────
+          if (widget.options.isNotEmpty)
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: widget.options.map((opt) {
+                return Chip(
+                  label: Text(opt, style: _inter(11, color: _kText)),
+                  deleteIcon: const Icon(Icons.close, size: 12),
+                  onDeleted: () => _removeOption(opt),
+                  deleteIconColor: _kGrey,
+                  backgroundColor: Colors.white,
+                  side: const BorderSide(color: _kBorder),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                );
+              }).toList(),
+            ),
+          if (widget.options.isNotEmpty) const SizedBox(height: 10),
+          // ── Add row ────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 32,
+                  child: TextField(
+                    controller: _ctrl,
+                    style: _inter(12),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      hintText: 'New option…',
+                      hintStyle: _inter(12, color: _kGrey),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: _kBorder),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: _kBorder),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide:
+                            const BorderSide(color: _kBlue, width: 1.5),
+                      ),
+                    ),
+                    onSubmitted: (_) => _addOption(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 32,
+                child: OutlinedButton(
+                  onPressed: _addOption,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _kBlue,
+                    side: const BorderSide(color: _kBlue),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6)),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text('Add', style: _inter(12, color: _kBlue, weight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -32,7 +32,6 @@ class SidebarNav extends StatelessWidget {
     SidebarNavEntry('Users', Icons.people_outline),
     SidebarNavEntry('CSV Upload', Icons.upload_file_outlined),
     SidebarNavEntry('Settings', Icons.settings_outlined),
-    SidebarNavEntry('Disposition', Icons.rule_outlined),
   ];
 
   TextStyle _inter(

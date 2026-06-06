@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../shared/widgets/status_badge.dart';
+import 'admin_shell.dart';
 
 // ─────────────────────────────────────────────
 //  Colour constants
@@ -193,6 +194,14 @@ class _CampaignContentState extends State<CampaignContent> {
               onClose: _closePanel,
               onCancel: _closePanel,
               onSave: _closePanel,
+              onOpenFormBuilder: () {
+                _closePanel();
+                AdminShell.shellKey.currentState?.navigateTo(5);
+              },
+              onOpenDisposition: () {
+                _closePanel();
+                AdminShell.shellKey.currentState?.navigateTo(6);
+              },
             ),
           ),
         ],
@@ -530,7 +539,7 @@ class _IconBtnState extends State<_IconBtn> {
 //  Slide Panel (Create / Edit)
 // ─────────────────────────────────────────────
 class _SlidePanel extends StatelessWidget {
-  const _SlidePanel({
+  _SlidePanel({
     required this.isEditMode,
     required this.nameCtrl,
     required this.descCtrl,
@@ -541,6 +550,8 @@ class _SlidePanel extends StatelessWidget {
     required this.onClose,
     required this.onCancel,
     required this.onSave,
+    required this.onOpenFormBuilder,
+    required this.onOpenDisposition,
   });
 
   final bool isEditMode;
@@ -553,6 +564,8 @@ class _SlidePanel extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onCancel;
   final VoidCallback onSave;
+  final VoidCallback onOpenFormBuilder;
+  final VoidCallback onOpenDisposition;
 
   @override
   Widget build(BuildContext context) {
@@ -667,7 +680,7 @@ class _SlidePanel extends StatelessWidget {
                             borderRadius: BorderRadius.circular(8)),
                         alignment: Alignment.centerLeft,
                       ),
-                      onPressed: () {},
+                      onPressed: onOpenFormBuilder,
                       icon: const Icon(Icons.dynamic_form_outlined,
                           size: 17, color: Colors.white),
                       label: Text('Open Form Builder',
@@ -691,7 +704,7 @@ class _SlidePanel extends StatelessWidget {
                         ),
                         alignment: Alignment.centerLeft,
                       ),
-                      onPressed: () {},
+                      onPressed: onOpenDisposition,
                       icon: const Icon(Icons.tune, size: 17, color: _kTextLight),
                       label: Text('Disposition Settings',
                           style: _inter(13,

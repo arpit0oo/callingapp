@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'features/auth/login_screen.dart';
+import 'features/company_admin/admin_shell.dart';
 
 void main() {
   runApp(const MyApp());
