@@ -30,6 +30,20 @@ The system is designed with a responsive approach:
 - **Desktop Web Interface**: For admins, super admins, and managers.
 - **Mobile Simulated Interface**: Centred layout constrained to 420px for cold/warm callers to run seamlessly in mobile browsers or standalone mobile apps.
 
+### 1.1 Page Count & Module Summary
+
+The application contains **21 unique screens/views** partitioned across 5 user roles:
+
+| Module / Shell | Role Profile | Screen Count | Specific Screen Names |
+| :--- | :--- | :---: | :--- |
+| **Authentication** | Guest Access | **1** | Login Screen |
+| **Super Admin Shell** | Platform Owner | **4** | Tenants, Users (Coming Soon), Platform Settings, Billing (Coming Soon) |
+| **Company Admin Shell** | Org Administrator | **6** | Dashboard, Campaigns, Users, CSV Upload, Form Builder, Campaign Settings |
+| **Manager Shell** | Queue Supervisor | **4** | Dashboard, Caller Management, Leads, Settings (Coming Soon) |
+| **Cold Caller Shell** | Outbound Call Agent | **3** | Home Dashboard, Calling Workspace, Performance Tracking |
+| **Warm Caller Shell** | Followup Call Agent | **3** | Home Dashboard, Calling Workspace, Performance Tracking |
+| **Total** | | **21** | |
+
 ---
 
 ## 2. Folder Structure
@@ -88,48 +102,70 @@ CallingApp enforces strict visual segregation of resources based on 5 functional
 
 ---
 
-## 4. Navigation Architecture
+## 4. Navigation Architecture & Flow
 
-Navigation is governed by a role-specific shell pattern using `IndexedStack` to maintain persistent visual states without page rebuilds.
+CallingApp implements a clean, decoupled navigation flow designed to optimize memory usage and keep application states persistent while navigating between various dashboard tools.
+
+### 4.1 Global Navigation Flow Diagram
 
 ```
-                     ┌───────────────┐
-                     │  LoginScreen  │
-                     └───────┬───────┘
-                             │ (pushReplacement)
-       ┌─────────────────────┼─────────────────────┐
-       ▼                     ▼                     ▼
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│SuperAdmin    │      │AdminShell    │      │ManagerShell  │
-│Shell         │      │              │      │              │
-│ ├─ Tenants   │      │ ├─ Dashboard │      │ ├─ Dashboard │
-│ ├─ Users     │      │ ├─ Campaigns │      │ ├─ Callers   │
-│ ├─ Platform  │      │ ├─ Users     │      │ ├─ Leads     │
-│ └─ Billing   │      │ ├─ CSV       │      │ └─ Settings  │
-└──────────────┘      │ ├─ FormBld   │      └──────────────┘
-                      │ ├─ Dispos    │
-                      └──────────────┘
+[User Session Startup]
+        │
+        ▼
+ ┌─────────────┐
+ │ LoginScreen │
+ └──────┬──────┘
+        │
+        ├─► Authenticate as Super Admin ──► Route: SuperAdminShell (Web Desktop)
+        │                                     ├─► Tenants [Tab 0]
+        │                                     ├─► Users Placeholder [Tab 1]
+        │                                     ├─► Platform Settings [Tab 2]
+        │                                     └─► Billing Placeholder [Tab 3]
+        │
+        ├─► Authenticate as Company Admin ─► Route: AdminShell (Web Desktop)
+        │                                     ├─► Dashboard [Tab 0]
+        │                                     ├─► Campaigns [Tab 1] ─── (GlobalKey Deep Link) ───┐
+        │                                     ├─► Users [Tab 2]                                  │
+        │                                     ├─► CSV Upload [Tab 3]                             ▼
+        │                                     ├─► Form Builder [Tab 4] ◄─────────────────────────┘
+        │                                     └─► Campaign Settings [Tab 5] ◄────────────────────┘
+        │
+        ├─► Authenticate as Supervisor ───► Route: ManagerShell (Web Desktop)
+        │                                     ├─► Dashboard [Tab 0]
+        │                                     ├─► Caller Management [Tab 1]
+        │                                     ├─► Leads Audit & Search [Tab 2]
+        │                                     └─► Settings Placeholder [Tab 3]
+        │
+        └─► Authenticate as Caller (Agent) ─► Route: CallerShell (Simulated Mobile 420px)
+                                              ├─► Home [Tab 0] ── (Workspace Request Action) ───┐
+                                              ├─► Calling Workspace [Tab 1] ◄───────────────────┘
+                                              └─► Performance [Tab 2]
 ```
 
-### 4.1 Shell Components
-1. **`SuperAdminShell`**: Uses left navigation sidebar layout. Switches between multi-tenant panels, global configuration settings, and billing logs.
-2. **`AdminShell`**: Provides sidebar hooks to toggle between dashboards, campaign panels, provision tables, CSV uploads, custom forms, and API webhooks.
-3. **`ManagerShell`**: Controls operations views containing caller tables, queue progress indexes, and lead databases.
-4. **`CallerShell`**: Renders as a bottom navigation bar holding Home, Workspace, and Performance tabs.
+### 4.2 Comprehensive Navigation Flow Steps
 
-### 4.2 Programmatic Navigation
-Inter-module navigation (e.g., jumping from the Campaign list screen to the Form Builder or Campaign Settings screen) is handled programmatically using `GlobalKey` references to each parent shell state, bypassing typical route stacks:
+The navigation lifecycle flows through distinct phases:
 
-```dart
-// E.g., navigating to the Form Builder from Campaign list
-AdminShell.shellKey.currentState?.navigateTo(4); // Switches to Form Builder tab
-```
+1. **Gatekeeping (Authentication Route)**:
+   - All inbound traffic lands on the root `LoginScreen`.
+   - Upon successful credentials confirmation, the system triggers `Navigator.pushReplacement()`, completely wiping the login state from the navigation history stack and replacing it with the corresponding role shell (`SuperAdminShell`, `AdminShell`, `ManagerShell`, or `CallerShell`).
 
-### 4.3 Side Panel Overlays
-Detailed records, create/edit interfaces, and log history panels slide into the workspace horizontally instead of pushing a new view route:
-- Controlled via boolean triggers (e.g., `_panelOpen`).
-- Visualized using an `AnimatedPositioned` widget inside a parent `Stack`.
-- Clicking outside of the panel (on a dim gesture detector background) closes the panel automatically.
+2. **Persistent Shell Rendering (Tab Routing)**:
+   - Each shell instantiates an `IndexedStack` as its core layout canvas.
+   - When a user interacts with sidebar navigation buttons (web dashboards) or bottom navigation bar tabs (caller mobiles), the shell updates its inner `_selectedIndex` state via a callback.
+   - **Benefit**: The tab views are kept alive in the widget tree, retaining user context (e.g., search text inputs, half-filled forms, scroll offsets) without expensive rebuilds or route pushing.
+
+3. **Overlay Flow (Horizontal Side Panels)**:
+   - Instead of pushing full page routes, details interfaces (such as Tenant details, User creation forms, and Lead Audit records) are rendered inside the shell's active stack.
+   - Users trigger these views by tapping list rows. The overlay transitions in horizontally using an `AnimatedPositioned` widget changing from `right: -460` (hidden) to `right: 0` (visible).
+   - Dismissal occurs by tapping a semi-transparent background overlay barrier, restoring focus to the primary layout.
+
+4. **Programmatic Cross-Screen Flow (Global Keys)**:
+   - Deep-linking paths across unrelated stack tabs are managed programmatically via static `GlobalKey` assignments.
+   - **Example workflow**: From the Campaign Screen (Index 1), an Administrator clicks "Edit Campaign Form" or "Configure Webhooks". Rather than pushing new screens, the child widgets invoke:
+     - `AdminShell.shellKey.currentState?.navigateTo(4);` (Redirects to Form Builder)
+     - `AdminShell.shellKey.currentState?.navigateTo(5);` (Redirects to Campaign Settings)
+   - The shell switches tabs immediately, updating its navigation highlights.
 
 ---
 
