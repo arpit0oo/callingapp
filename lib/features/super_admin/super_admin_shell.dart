@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'tenants_screen.dart';
+import 'platform_settings_screen.dart';
 
 /// Single persistent shell for all Super Admin screens.
 /// Web layout — sidebar + IndexedStack, same pattern as AdminShell.
@@ -38,10 +39,10 @@ class SuperAdminShellState extends State<SuperAdminShell> {
             child: IndexedStack(
               index: _selectedIndex,
               children: const [
-                TenantsContent(),    // index 0 — Tenants
-                SizedBox.shrink(),   // index 1 — Users (placeholder)
-                SizedBox.shrink(),   // index 2 — Platform (placeholder)
-                SizedBox.shrink(),   // index 3 — Billing (placeholder)
+                TenantsContent(),           // index 0 — Tenants
+                _ComingSoon(),              // index 1 — Users
+                PlatformSettingsContent(),  // index 2 — Platform
+                _ComingSoon(),              // index 3 — Billing
               ],
             ),
           ),
@@ -213,6 +214,43 @@ class _NavItem extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+// ── Coming-soon empty state ─────────────────────────────────────────────────
+class _ComingSoon extends StatelessWidget {
+  const _ComingSoon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.construction_outlined,
+            size: 48,
+            color: Color(0xFF9AA0A6),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Coming Soon',
+            style: GoogleFonts.inter(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFF5F6368),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'This section is under development',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              color: const Color(0xFF9AA0A6),
+            ),
+          ),
+        ],
       ),
     );
   }
