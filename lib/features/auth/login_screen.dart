@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../company_admin/admin_shell.dart';
+import '../manager/manager_shell.dart';
+import '../cold_caller/caller_shell.dart';
+import '../super_admin/super_admin_shell.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -37,22 +40,24 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // ── Logic ─────────────────────────────────────────────────────
-  Future<void> _handleSignIn() async {
-    setState(() {
-      _emailError = _emailCtrl.text.trim().isEmpty ? 'Email address is required' : null;
-      _passwordError = _passwordCtrl.text.isEmpty ? 'Password is required' : null;
-    });
-
-    if (_emailError != null || _passwordError != null) return;
-
-    setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+  // ── Quick-access navigation (testing) ────────────────────────
+  void _goTo(Widget shell) {
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => AdminShell(key: AdminShell.shellKey)),
+      MaterialPageRoute(builder: (_) => shell),
+    );
+  }
+
+  void _showComingSoon() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Coming Soon',
+            style: GoogleFonts.inter(fontSize: 13, color: Colors.white)),
+        backgroundColor: const Color(0xFF5F6368),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
     );
   }
 
@@ -155,8 +160,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 24),
 
-                    // ── Sign In button ────────────────────────
-                    _buildSignInButton(),
+                    // ── Quick Access (Testing) ────────────────
+                    _buildQuickAccessButtons(),
                     const SizedBox(height: 24),
 
                     // ── Divider with help text ────────────────
@@ -266,10 +271,62 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildSignInButton() {
-    return _HoverButton(
-      onTap: _isLoading ? null : _handleSignIn,
-      isLoading: _isLoading,
+  Widget _buildQuickAccessButtons() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Label
+        Center(
+          child: Text(
+            'Quick Access (Testing)',
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              color: _textSecondary,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Company Admin
+        _RoleButton(
+          label: 'Company Admin',
+          color: _primary,
+          textColor: Colors.white,
+          onTap: () => _goTo(AdminShell(key: AdminShell.shellKey)),
+        ),
+        const SizedBox(height: 8),
+        // Manager
+        _RoleButton(
+          label: 'Manager',
+          color: const Color(0xFF34A853),
+          textColor: Colors.white,
+          onTap: () => _goTo(ManagerShell(key: ManagerShell.shellKey)),
+        ),
+        const SizedBox(height: 8),
+        // Cold Caller
+        _RoleButton(
+          label: 'Cold Caller',
+          color: const Color(0xFFFBBC04),
+          textColor: const Color(0xFF202124),
+          onTap: () => _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold')),
+        ),
+        const SizedBox(height: 8),
+        // Warm Caller
+        _RoleButton(
+          label: 'Warm Caller',
+          color: const Color(0xFF7B61FF),
+          textColor: Colors.white,
+          onTap: () => _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm')),
+        ),
+        const SizedBox(height: 8),
+        // Super Admin
+        _RoleButton(
+          label: 'Super Admin',
+          color: const Color(0xFF5F6368),
+          textColor: Colors.white,
+          onTap: () => _goTo(SuperAdminShell(key: SuperAdminShell.shellKey)),
+        ),
+      ],
     );
   }
 
@@ -375,68 +432,70 @@ class _StyledTextFieldState extends State<_StyledTextField> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sign In button with hover effect
+// Role button with hover effect
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _HoverButton extends StatefulWidget {
-  const _HoverButton({required this.onTap, required this.isLoading});
+class _RoleButton extends StatefulWidget {
+  const _RoleButton({
+    required this.label,
+    required this.color,
+    required this.textColor,
+    required this.onTap,
+  });
 
-  final VoidCallback? onTap;
-  final bool isLoading;
+  final String label;
+  final Color color;
+  final Color textColor;
+  final VoidCallback onTap;
 
   @override
-  State<_HoverButton> createState() => _HoverButtonState();
+  State<_RoleButton> createState() => _RoleButtonState();
 }
 
-class _HoverButtonState extends State<_HoverButton> {
-  static const _primary = Color(0xFF1A73E8);
-  static const _primaryDark = Color(0xFF1557B0);
-
+class _RoleButtonState extends State<_RoleButton> {
   bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
+    // Darken by ~10% on hover
+    final hoverColor = Color.fromARGB(
+      widget.color.alpha,
+      (widget.color.red * 0.88).round(),
+      (widget.color.green * 0.88).round(),
+      (widget.color.blue * 0.88).round(),
+    );
+
     return MouseRegion(
-      cursor: widget.onTap != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          height: 48,
+          duration: const Duration(milliseconds: 140),
+          height: 44,
           decoration: BoxDecoration(
-            color: _hovered && !widget.isLoading ? _primaryDark : _primary,
+            color: _hovered ? hoverColor : widget.color,
             borderRadius: BorderRadius.circular(8),
-            boxShadow: _hovered && !widget.isLoading
+            boxShadow: _hovered
                 ? [
                     BoxShadow(
-                      color: _primary.withOpacity(0.35),
-                      blurRadius: 12,
+                      color: widget.color.withOpacity(0.30),
+                      blurRadius: 10,
                       offset: const Offset(0, 4),
                     )
                   ]
                 : [],
           ),
-          child: Center(
-            child: widget.isLoading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2.2,
-                    ),
-                  )
-                : Text(
-                    'Sign In',
-                    style: GoogleFonts.inter(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                      letterSpacing: 0.1,
-                    ),
-                  ),
+          alignment: Alignment.center,
+          child: Text(
+            widget.label,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: widget.textColor,
+              letterSpacing: 0.1,
+            ),
           ),
         ),
       ),

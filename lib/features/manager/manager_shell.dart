@@ -1,0 +1,220 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+import 'caller_management_screen.dart';
+import 'dashboard_screen.dart';
+import 'leads_screen.dart';
+
+/// Single persistent shell for all Manager screens.
+/// The sidebar renders once; screen content switches via [IndexedStack].
+class ManagerShell extends StatefulWidget {
+  const ManagerShell({super.key});
+
+  /// Global key — lets any widget call [ManagerShellState.navigateTo].
+  static final GlobalKey<ManagerShellState> shellKey =
+      GlobalKey<ManagerShellState>();
+
+  @override
+  State<ManagerShell> createState() => ManagerShellState();
+}
+
+class ManagerShellState extends State<ManagerShell> {
+  int _selectedIndex = 0;
+
+  /// Programmatically switch to any tab by index.
+  void navigateTo(int index) => setState(() => _selectedIndex = index);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FA),
+      body: Row(
+        children: [
+          // ── Sidebar — built once, never rebuilds ──
+          _ManagerSidebar(
+            selectedIndex: _selectedIndex,
+            onItemSelected: (i) => setState(() => _selectedIndex = i),
+          ),
+          // ── Content area ─────────────────────────
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: const [
+                ManagerDashboardContent(),    // index 0 — Dashboard
+                CallerManagementContent(),    // index 1 — Callers
+                LeadsContent(),               // index 2 — Leads
+                SizedBox.shrink(),            // index 3 — Settings (placeholder)
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Manager Sidebar (file-private)
+// ─────────────────────────────────────────────
+class _ManagerSidebar extends StatelessWidget {
+  const _ManagerSidebar({
+    required this.selectedIndex,
+    required this.onItemSelected,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onItemSelected;
+
+  static const _kBlue = Color(0xFF1A73E8);
+  static const _kGrey = Color(0xFF80868B);
+  static const _kSidebarBorder = Color(0xFFE8EAED);
+  static const _kTextLight = Color(0xFF5F6368);
+
+  static const _navItems = <_NavEntry>[
+    _NavEntry('Dashboard',  Icons.dashboard_outlined),
+    _NavEntry('Callers',    Icons.headset_mic_outlined),
+    _NavEntry('Leads',      Icons.contacts_outlined),
+    _NavEntry('Settings',   Icons.settings_outlined),
+  ];
+
+  TextStyle _inter(
+    double size, {
+    FontWeight weight = FontWeight.w400,
+    Color color = const Color(0xFF202124),
+  }) =>
+      GoogleFonts.inter(fontSize: size, fontWeight: weight, color: color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 240,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: _kSidebarBorder)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Logo ───────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: _kBlue,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'CA',
+                    style: _inter(12, weight: FontWeight.w700, color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text('CallingApp', style: _inter(16, weight: FontWeight.w700)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // ── Nav items ──────────────────────────
+          ..._navItems.asMap().entries.map((e) {
+            final isSelected = e.key == selectedIndex;
+            return _NavItem(
+              entry: e.value,
+              isSelected: isSelected,
+              onTap: () => onItemSelected(e.key),
+            );
+          }),
+          const Spacer(),
+          // ── User footer ────────────────────────
+          const Divider(color: _kSidebarBorder, height: 1),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: _kBlue.withOpacity(0.15),
+                  child: Text(
+                    'A',
+                    style: _inter(14, weight: FontWeight.w600, color: _kBlue),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Amit Sharma',
+                        style: _inter(13, weight: FontWeight.w600)),
+                    Text('Manager', style: _inter(11, color: _kGrey)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Private data holder ──────────────────────────────────────────────────────
+class _NavEntry {
+  const _NavEntry(this.label, this.icon);
+  final String label;
+  final IconData icon;
+}
+
+// ── Private nav item tile ────────────────────────────────────────────────────
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.entry,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final _NavEntry entry;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  static const _kBlue = Color(0xFF1A73E8);
+  static const _kTextLight = Color(0xFF5F6368);
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isSelected ? _kBlue : _kTextLight;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+        decoration: BoxDecoration(
+          color: isSelected ? _kBlue.withOpacity(0.08) : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          border: isSelected
+              ? const Border(left: BorderSide(color: _kBlue, width: 3))
+              : null,
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(isSelected ? 13 : 16, 10, 12, 10),
+          child: Row(
+            children: [
+              Icon(entry.icon, size: 18, color: color),
+              const SizedBox(width: 10),
+              Text(
+                entry.label,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
