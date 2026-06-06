@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import '../../shared/widgets/sidebar_nav.dart';
 import 'dashboard_screen.dart';
 import 'campaign_screen.dart';
-import 'form_builder_screen.dart';
+import 'user_management_screen.dart';
 import 'csv_upload_screen.dart';
+import 'campaign_settings_screen.dart';
 
 /// Single persistent shell for all Company Admin screens.
 /// The sidebar renders once; screen content switches via [IndexedStack].
@@ -34,10 +35,12 @@ class _AdminShellState extends State<AdminShell> {
             child: IndexedStack(
               index: _selectedIndex,
               children: const [
-                DashboardContent(),    // index 0
-                CampaignContent(),     // index 1
-                FormBuilderContent(),  // index 2
-                CsvUploadContent(),    // index 3
+                DashboardContent(),          // index 0 — Dashboard
+                CampaignContent(),           // index 1 — Campaigns
+                UserManagementContent(),     // index 2 — Users
+                CsvUploadContent(),          // index 3 — CSV Upload
+                SizedBox.shrink(),           // index 4 — Settings (placeholder)
+                CampaignSettingsContent(),   // index 5 — Disposition (temp)
               ],
             ),
           ),

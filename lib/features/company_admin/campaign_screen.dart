@@ -645,6 +645,64 @@ class _SlidePanel extends StatelessWidget {
             ),
           ),
 
+          // ── Edit-mode quick actions ───────────
+          if (isEditMode) ...[
+            const SizedBox(height: 16),
+            const Divider(color: _kBorder, height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Open Form Builder — solid blue filled
+                  SizedBox(
+                    height: 48,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _kBlue,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        alignment: Alignment.centerLeft,
+                      ),
+                      onPressed: () {},
+                      icon: const Icon(Icons.dynamic_form_outlined,
+                          size: 17, color: Colors.white),
+                      label: Text('Open Form Builder',
+                          style: _inter(13,
+                              weight: FontWeight.w500, color: Colors.white)),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  // Disposition Settings — white bg, grey border
+                  SizedBox(
+                    height: 48,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: _kTextLight,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          side: const BorderSide(color: _kBorder),
+                        ),
+                        alignment: Alignment.centerLeft,
+                      ),
+                      onPressed: () {},
+                      icon: const Icon(Icons.tune, size: 17, color: _kTextLight),
+                      label: Text('Disposition Settings',
+                          style: _inter(13,
+                              weight: FontWeight.w500, color: _kTextLight)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           // ── Footer buttons ────────────────────
           Container(
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
