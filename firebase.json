@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"android":{"default":{"projectId":"callingapp-saas","appId":"1:209151491128:android:326c07cff6253ef19afacd","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"callingapp-saas","configurations":{"android":"1:209151491128:android:326c07cff6253ef19afacd","web":"1:209151491128:web:d8cb992d99b3594b9afacd"}}}}}}
