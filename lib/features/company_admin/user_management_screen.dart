@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:callingapp/services/app_session.dart';
+import 'package:callingapp/services/user_service.dart';
+import 'package:callingapp/services/campaign_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'package:flutter/services.dart';
 import '../../shared/widgets/status_badge.dart';
 
 // ─────────────────────────────────────────────
@@ -28,6 +33,9 @@ BoxDecoration _card({double radius = 8}) => BoxDecoration(
       ],
     );
 
+String _capitalize(String s) =>
+    s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1).toLowerCase()}';
+
 // ─────────────────────────────────────────────
 //  Data models
 // ─────────────────────────────────────────────
@@ -40,8 +48,10 @@ class _User {
     required this.status,
     required this.lastActive,
     required this.phone,
+    this.docId = '',
   });
   final String name, email, role, campaign, status, lastActive, phone;
+  final String docId;
 }
 
 const _kUsers = [
@@ -53,7 +63,7 @@ const _kUsers = [
   _User(name: 'Suresh Yadav', email: 'suresh@callingapp.in', role: 'Caller',  campaign: 'Xpert Tutor',     status: 'Active',   lastActive: '1h ago',  phone: '+91 98001 66666'),
 ];
 
-const _kCampaigns = ['Xpert Tutor', 'Solar Campaign', 'DSA Campaign'];
+const _kCampaignsFallback = ['Xpert Tutor', 'Solar Campaign', 'DSA Campaign'];
 const _kRoles = ['Manager', 'Caller'];
 const _kStatuses = ['Active', 'Inactive'];
 const _kFilterTabs = ['All', 'Managers', 'Callers'];
@@ -74,13 +84,14 @@ class _UserManagementContentState extends State<UserManagementContent> {
   bool _panelOpen = false;
   bool _isEditMode = false;
   _User? _editingUser;
+  String _editingDocId = '';
 
   // Form controllers
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   String _selectedRole = _kRoles.first;
-  String _selectedCampaign = _kCampaigns.first;
+  String _selectedCampaign = _kCampaignsFallback.first;
   String _selectedStatus = _kStatuses.first;
 
   @override
@@ -108,19 +119,20 @@ class _UserManagementContentState extends State<UserManagementContent> {
     _emailCtrl.clear();
     _phoneCtrl.clear();
     _selectedRole = _kRoles.first;
-    _selectedCampaign = _kCampaigns.first;
+    _selectedCampaign = _kCampaignsFallback.first;
     _selectedStatus = _kStatuses.first;
-    setState(() { _isEditMode = false; _editingUser = null; _panelOpen = true; });
+    setState(() { _isEditMode = false; _editingUser = null; _editingDocId = ''; _panelOpen = true; });
   }
 
   void _openEdit(_User u) {
     _nameCtrl.text = u.name;
     _emailCtrl.text = u.email;
-    _phoneCtrl.text = u.phone;
+    // Strip non-digits so the digits-only phone field accepts it
+    _phoneCtrl.text = u.phone.replaceAll(RegExp(r'\D'), '');
     _selectedRole = u.role;
-    _selectedCampaign = u.campaign;
+    _selectedCampaign = u.campaign == '\u2014' ? _kCampaignsFallback.first : u.campaign;
     _selectedStatus = u.status;
-    setState(() { _isEditMode = true; _editingUser = u; _panelOpen = true; });
+    setState(() { _isEditMode = true; _editingUser = u; _editingDocId = u.docId; _panelOpen = true; });
   }
 
   void _closePanel() => setState(() => _panelOpen = false);
@@ -220,7 +232,49 @@ class _UserManagementContentState extends State<UserManagementContent> {
                     ),
                     const SizedBox(height: 12),
                     const Divider(color: _kBorder, height: 1),
-                    _UserTable(users: _filtered, onEdit: _openEdit),
+                    StreamBuilder<QuerySnapshot>(
+                      stream: UserService.getUsers(AppSession.tenantId),
+                      builder: (context, snapshot) {
+                        final docs = snapshot.hasData ? snapshot.data!.docs : <QueryDocumentSnapshot>[];
+                        if (docs.isEmpty) {
+                          return _UserTable(users: _filtered, onEdit: _openEdit, tenantId: AppSession.tenantId);
+                        }
+                        final tab = _kFilterTabs[_filterIndex];
+                        final liveDocs = docs.where((doc) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          final role = (data['role'] as String? ?? '').toLowerCase();
+                          final name = (data['name'] as String? ?? '').toLowerCase();
+                          final matchTab = tab == 'All' ||
+                              (tab == 'Managers' && role == 'manager') ||
+                              (tab == 'Callers' && role == 'caller');
+                          final matchSearch = _search.isEmpty ||
+                              name.contains(_search.toLowerCase());
+                          return matchTab && matchSearch;
+                        }).toList();
+                        final liveUsers = liveDocs.map((doc) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          final campaigns = data['assignedCampaigns'] as List<dynamic>?;
+                          final campaign = (campaigns != null && campaigns.isNotEmpty)
+                              ? campaigns.first.toString()
+                              : '\u2014';
+                          final ts = data['lastActive'] as Timestamp?;
+                          final lastActive = ts != null
+                              ? '${ts.toDate().day}/${ts.toDate().month}/${ts.toDate().year}'
+                              : '\u2014';
+                          return _User(
+                            docId: doc.id,
+                            name: data['name'] as String? ?? '\u2014',
+                            email: data['email'] as String? ?? '\u2014',
+                            role: _capitalize(data['role'] as String? ?? 'caller'),
+                            campaign: campaign,
+                            status: _capitalize(data['status'] as String? ?? 'inactive'),
+                            lastActive: lastActive,
+                            phone: data['phone'] as String? ?? '',
+                          );
+                        }).toList();
+                        return _UserTable(users: liveUsers, onEdit: _openEdit, tenantId: AppSession.tenantId);
+                      },
+                    ),
                   ]),
                 ),
                 const SizedBox(height: 28),
@@ -254,7 +308,54 @@ class _UserManagementContentState extends State<UserManagementContent> {
               onStatusChanged: (v) => setState(() => _selectedStatus = v!),
               onClose: _closePanel,
               onCancel: _closePanel,
-              onSave: _closePanel,
+              onSave: () async {
+                // Validate name
+                if (_nameCtrl.text.trim().isEmpty) return;
+
+                // Validate email format
+                final emailRegex = RegExp(r'^[\w\.\-]+@[\w\-]+\.\w{2,}$');
+                if (!emailRegex.hasMatch(_emailCtrl.text.trim())) return;
+
+                // Validate phone — exactly 10 digits
+                final phoneDigits = _phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '');
+                if (phoneDigits.length != 10) return;
+
+                final payload = {
+                  'name': _nameCtrl.text.trim(),
+                  'email': _emailCtrl.text.trim(),
+                  'phone': _phoneCtrl.text.trim(),
+                  'role': _selectedRole.toLowerCase().replaceAll(' ', '_'),
+                  'assignedCampaigns': [_selectedCampaign],
+                  'status': _selectedStatus.toLowerCase(),
+                };
+
+                if (_isEditMode && _editingDocId.isNotEmpty) {
+                  await UserService.updateUser(
+                    AppSession.tenantId,
+                    _editingDocId,
+                    payload,
+                  );
+                } else {
+                  final tempUserId =
+                      DateTime.now().millisecondsSinceEpoch.toString();
+                  await UserService.createUser(
+                    AppSession.tenantId,
+                    tempUserId,
+                    {'createdAt': FieldValue.serverTimestamp(), 'tenantId': AppSession.tenantId, ...payload},
+                  );
+                  // createUser hardcodes assignedCampaigns:[] and status:'active';
+                  // immediately patch with the user's actual selections.
+                  await UserService.updateUser(
+                    AppSession.tenantId,
+                    tempUserId,
+                    {
+                      'assignedCampaigns': [_selectedCampaign],
+                      'status': _selectedStatus.toLowerCase(),
+                    },
+                  );
+                }
+                _closePanel();
+              },
             ),
           ),
         ],
@@ -302,9 +403,10 @@ class _StatCard extends StatelessWidget {
 //  User Table
 // ─────────────────────────────────────────────
 class _UserTable extends StatelessWidget {
-  const _UserTable({required this.users, required this.onEdit});
+  const _UserTable({required this.users, required this.onEdit, required this.tenantId});
   final List<_User> users;
   final ValueChanged<_User> onEdit;
+  final String tenantId;
 
   static const _columns = ['User', 'Role', 'Assigned Campaign', 'Status', 'Last Active', 'Actions'];
 
@@ -363,7 +465,7 @@ class _UserTable extends StatelessWidget {
       // Last Active
       DataCell(Text(u.lastActive, style: _inter(13, color: _kTextLight))),
       // Actions
-      DataCell(_ActionBtns(user: u, onEdit: onEdit)),
+      DataCell(_ActionBtns(user: u, onEdit: onEdit, tenantId: tenantId)),
     ]);
   }
 }
@@ -389,16 +491,84 @@ class _RoleBadge extends StatelessWidget {
 }
 
 class _ActionBtns extends StatelessWidget {
-  const _ActionBtns({required this.user, required this.onEdit});
+  const _ActionBtns({
+    required this.user,
+    required this.onEdit,
+    required this.tenantId,
+  });
   final _User user;
   final ValueChanged<_User> onEdit;
+  final String tenantId;
+
+  bool get _isLive => user.docId.isNotEmpty;
+
+  Future<void> _toggleStatus(BuildContext context) async {
+    if (!_isLive) return;
+    final newStatus = user.status.toLowerCase() == 'active' ? 'inactive' : 'active';
+    await UserService.updateUser(tenantId, user.docId, {'status': newStatus});
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    if (!_isLive) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('Delete User', style: _inter(16, weight: FontWeight.w600)),
+        content: Text(
+          'Are you sure you want to delete ${user.name}? This action cannot be undone.',
+          style: _inter(13, color: _kTextLight),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: _inter(13, color: _kTextLight)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kRed,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete', style: _inter(13, weight: FontWeight.w600, color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(tenantId)
+          .collection('users')
+          .doc(user.docId)
+          .delete();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isActive = user.status.toLowerCase() == 'active';
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      _IconBtn(icon: Icons.edit_outlined, tooltip: 'Edit', color: _kBlue, onTap: () => onEdit(user)),
+      _IconBtn(
+        icon: Icons.edit_outlined,
+        tooltip: 'Edit',
+        color: _kBlue,
+        onTap: () => onEdit(user),
+      ),
       const SizedBox(width: 4),
-      _IconBtn(icon: Icons.person_off_outlined, tooltip: 'Deactivate', color: _kRed, onTap: () {}),
+      _IconBtn(
+        icon: isActive ? Icons.person_off_outlined : Icons.person_outlined,
+        tooltip: isActive ? 'Deactivate' : 'Activate',
+        color: _isLive ? _kRed : _kGrey,
+        onTap: () => _toggleStatus(context),
+      ),
+      const SizedBox(width: 4),
+      _IconBtn(
+        icon: Icons.delete_outline,
+        tooltip: 'Delete',
+        color: _isLive ? _kRed : _kGrey,
+        onTap: () => _confirmDelete(context),
+      ),
     ]);
   }
 }
@@ -444,7 +614,7 @@ class _IconBtnState extends State<_IconBtn> {
 // ─────────────────────────────────────────────
 //  Slide Panel — Add / Edit User
 // ─────────────────────────────────────────────
-class _UserPanel extends StatelessWidget {
+class _UserPanel extends StatefulWidget {
   const _UserPanel({
     required this.isEditMode,
     required this.nameCtrl,
@@ -468,6 +638,44 @@ class _UserPanel extends StatelessWidget {
   final VoidCallback onClose, onCancel, onSave;
 
   @override
+  State<_UserPanel> createState() => _UserPanelState();
+}
+
+class _UserPanelState extends State<_UserPanel> {
+  String? _nameError;
+  String? _emailError;
+  String? _phoneError;
+
+  static final _emailRegex = RegExp(r'^[\w\.\-]+@[\w\-]+\.\w{2,}$');
+
+  /// Returns true if all fields are valid; populates error strings otherwise.
+  bool _validate() {
+    final name = widget.nameCtrl.text.trim();
+    final email = widget.emailCtrl.text.trim();
+    final phoneDigits = widget.phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '');
+
+    String? nameErr = name.isEmpty ? 'Name is required.' : null;
+    String? emailErr = email.isEmpty
+        ? 'Email is required.'
+        : (!_emailRegex.hasMatch(email) ? 'Enter a valid email address.' : null);
+    String? phoneErr = phoneDigits.length != 10 ? 'Enter exactly 10 digits.' : null;
+
+    setState(() {
+      _nameError = nameErr;
+      _emailError = emailErr;
+      _phoneError = phoneErr;
+    });
+    return nameErr == null && emailErr == null && phoneErr == null;
+  }
+
+  Widget _errorText(String? msg) => msg == null
+      ? const SizedBox.shrink()
+      : Padding(
+          padding: const EdgeInsets.only(top: 5),
+          child: Text(msg, style: _inter(11, color: _kRed)),
+        );
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: 420,
@@ -481,11 +689,11 @@ class _UserPanel extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(24, 20, 16, 20),
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _kBorder))),
           child: Row(children: [
-            Text(isEditMode ? 'Edit User' : 'Add User',
+            Text(widget.isEditMode ? 'Edit User' : 'Add User',
                 style: _inter(17, weight: FontWeight.w600)),
             const Spacer(),
             InkWell(
-              onTap: onClose,
+              onTap: widget.onClose,
               borderRadius: BorderRadius.circular(20),
               child: Padding(
                 padding: const EdgeInsets.all(6),
@@ -502,34 +710,69 @@ class _UserPanel extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               _FieldLabel('Full Name'),
               const SizedBox(height: 6),
-              _OutlinedField(controller: nameCtrl, hint: 'Enter full name'),
-              const SizedBox(height: 18),
+              _OutlinedField(controller: widget.nameCtrl, hint: 'Enter full name',
+                  hasError: _nameError != null),
+              _errorText(_nameError),
+              const SizedBox(height: 14),
 
               _FieldLabel('Email Address'),
               const SizedBox(height: 6),
-              _OutlinedField(controller: emailCtrl, hint: 'email@example.com',
-                  type: TextInputType.emailAddress),
-              const SizedBox(height: 18),
+              _OutlinedField(controller: widget.emailCtrl, hint: 'email@example.com',
+                  type: TextInputType.emailAddress, hasError: _emailError != null),
+              _errorText(_emailError),
+              const SizedBox(height: 14),
 
               _FieldLabel('Phone Number'),
               const SizedBox(height: 6),
-              _OutlinedField(controller: phoneCtrl, hint: '+91 XXXXX XXXXX',
-                  type: TextInputType.phone),
-              const SizedBox(height: 18),
+              TextField(
+                controller: widget.phoneCtrl,
+                keyboardType: TextInputType.phone,
+                maxLength: 10,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: _inter(13),
+                decoration: InputDecoration(
+                  hintText: '10-digit mobile number',
+                  hintStyle: _inter(13, color: _kGrey),
+                  counterText: '',
+                  errorText: null,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: _phoneError != null ? _kRed : _kBorder)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: _phoneError != null ? _kRed : _kBorder)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(color: _phoneError != null ? _kRed : _kBlue, width: 1.5)),
+                  filled: true, fillColor: _kBgPage,
+                ),
+              ),
+              _errorText(_phoneError),
+              const SizedBox(height: 14),
 
               _FieldLabel('Role'),
               const SizedBox(height: 6),
-              _Dropdown<String>(value: selectedRole, items: _kRoles, onChanged: onRoleChanged),
+              _Dropdown<String>(value: widget.selectedRole, items: _kRoles, onChanged: widget.onRoleChanged),
               const SizedBox(height: 18),
 
               _FieldLabel('Assign Campaign'),
               const SizedBox(height: 6),
-              _Dropdown<String>(value: selectedCampaign, items: _kCampaigns, onChanged: onCampaignChanged),
+              StreamBuilder<QuerySnapshot>(
+                stream: CampaignService.getCampaigns(AppSession.tenantId),
+                builder: (context, snapshot) {
+                  final docs = snapshot.hasData ? snapshot.data!.docs : <QueryDocumentSnapshot>[];
+                  final campaigns = docs
+                      .map((d) => (d.data() as Map<String, dynamic>)['name'] as String? ?? '')
+                      .where((n) => n.isNotEmpty)
+                      .toList();
+                  final items = campaigns.isEmpty ? _kCampaignsFallback : campaigns;
+                  final current = items.contains(widget.selectedCampaign) ? widget.selectedCampaign : items.first;
+                  return _Dropdown<String>(value: current, items: items, onChanged: widget.onCampaignChanged);
+                },
+              ),
               const SizedBox(height: 18),
 
               _FieldLabel('Status'),
               const SizedBox(height: 6),
-              _Dropdown<String>(value: selectedStatus, items: _kStatuses, onChanged: onStatusChanged),
+              _Dropdown<String>(value: widget.selectedStatus, items: _kStatuses, onChanged: widget.onStatusChanged),
             ]),
           ),
         ),
@@ -547,7 +790,7 @@ class _UserPanel extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 13),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-                onPressed: onCancel,
+                onPressed: widget.onCancel,
                 child: Text('Cancel', style: _inter(13, weight: FontWeight.w500, color: _kTextLight)),
               ),
             ),
@@ -559,7 +802,9 @@ class _UserPanel extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 13),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-                onPressed: onSave,
+                onPressed: () {
+                  if (_validate()) widget.onSave();
+                },
                 child: Text('Save User',
                     style: _inter(13, weight: FontWeight.w600, color: Colors.white)),
               ),
@@ -584,13 +829,15 @@ class _FieldLabel extends StatelessWidget {
 }
 
 class _OutlinedField extends StatelessWidget {
-  const _OutlinedField({required this.controller, required this.hint, this.type});
+  const _OutlinedField({required this.controller, required this.hint, this.type, this.hasError = false});
   final TextEditingController controller;
   final String hint;
   final TextInputType? type;
+  final bool hasError;
 
   @override
   Widget build(BuildContext context) {
+    final borderColor = hasError ? _kRed : _kBorder;
     return TextField(
       controller: controller,
       keyboardType: type,
@@ -599,9 +846,9 @@ class _OutlinedField extends StatelessWidget {
         hintText: hint,
         hintStyle: _inter(13, color: _kGrey),
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _kBorder)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _kBorder)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: _kBlue, width: 1.5)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: borderColor)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: borderColor)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: hasError ? _kRed : _kBlue, width: 1.5)),
         filled: true, fillColor: _kBgPage,
       ),
     );
