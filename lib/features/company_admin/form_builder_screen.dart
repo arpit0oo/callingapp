@@ -1,5 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import '../../services/app_session.dart';
 
 // ─────────────────────────────────────────────
 //  Colour constants
@@ -65,15 +68,20 @@ class _CanvasField {
 //  Root widget — exported from this file
 // ─────────────────────────────────────────────
 class FormBuilderContent extends StatefulWidget {
-  const FormBuilderContent({super.key});
+  const FormBuilderContent({
+    super.key,
+    required this.campaignId,
+  });
+
+  final String campaignId;
 
   @override
   State<FormBuilderContent> createState() => _FormBuilderContentState();
 }
 
 class _FormBuilderContentState extends State<FormBuilderContent> {
-  // Pre-populated dummy fields
-  final List<_CanvasField> _fields = [
+  // Pre-populated dummy fields shown before Firestore loads
+  List<_CanvasField> _fields = [
     _CanvasField(
         type: _kFieldTypes[0], label: 'Full Name', required: true),
     _CanvasField(
@@ -89,6 +97,86 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
         required: true,
         options: ['High', 'Medium', 'Low']),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFormSchema();
+  }
+
+  // ── Map Firestore type label → _FieldType ──
+  _FieldType _typeFromLabel(String label) {
+    return _kFieldTypes.firstWhere(
+      (t) => t.label == label,
+      orElse: () => _kFieldTypes[0],
+    );
+  }
+
+  Future<void> _loadFormSchema() async {
+    final snap = await FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(AppSession.tenantId)
+        .collection('campaigns')
+        .doc(widget.campaignId)
+        .collection('form_schema')
+        .orderBy('order')
+        .get();
+
+    if (snap.docs.isEmpty) return;
+
+    final loaded = snap.docs.map((doc) {
+      final d = doc.data();
+      final opts = (d['options'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList();
+      return _CanvasField(
+        type: _typeFromLabel(d['type'] as String? ?? 'Text Input'),
+        label: d['label'] as String? ?? doc.id,
+        required: d['required'] as bool? ?? false,
+        options: opts,
+      );
+    }).toList();
+
+    setState(() => _fields = loaded);
+  }
+
+  Future<void> _saveFormSchema() async {
+    final db = FirebaseFirestore.instance;
+    final schemaCol = db
+        .collection('tenants')
+        .doc(AppSession.tenantId)
+        .collection('campaigns')
+        .doc(widget.campaignId)
+        .collection('form_schema');
+
+    // Delete all existing docs
+    final existing = await schemaCol.get();
+    final deleteBatch = db.batch();
+    for (final doc in existing.docs) {
+      deleteBatch.delete(doc.reference);
+    }
+    await deleteBatch.commit();
+
+    // Write each field
+    final writeBatch = db.batch();
+    for (int i = 0; i < _fields.length; i++) {
+      final f = _fields[i];
+      writeBatch.set(schemaCol.doc('field_$i'), {
+        'label':    f.label,
+        'type':     f.type.label,
+        'required': f.required,
+        'order':    i,
+        'options':  f.options,
+      });
+    }
+    await writeBatch.commit();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Form saved.')),
+      );
+    }
+  }
 
   void _addField(_FieldType type) {
     setState(() {
@@ -143,6 +231,7 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
             onLabelChanged: _updateLabel,
             onOptionsChanged: _updateOptions,
             onReorder: _reorder,
+            onSave: _saveFormSchema,
           ),
         ),
       ],
@@ -288,6 +377,7 @@ class _FormCanvas extends StatelessWidget {
     required this.onLabelChanged,
     required this.onOptionsChanged,
     required this.onReorder,
+    required this.onSave,
   });
 
   final List<_CanvasField> fields;
@@ -296,6 +386,7 @@ class _FormCanvas extends StatelessWidget {
   final void Function(Key id, String label) onLabelChanged;
   final void Function(Key id, List<String> opts) onOptionsChanged;
   final void Function(int oldIndex, int newIndex) onReorder;
+  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -312,6 +403,19 @@ class _FormCanvas extends StatelessWidget {
           ),
           child: Row(
             children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back, size: 20, color: _kTextLight),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: const BorderSide(color: _kBorder),
+                  ),
+                  padding: const EdgeInsets.all(8),
+                ),
+              ),
+              const SizedBox(width: 14),
               const Icon(Icons.dynamic_form_outlined,
                   size: 20, color: _kTextLight),
               const SizedBox(width: 10),
@@ -326,7 +430,7 @@ class _FormCanvas extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8)),
                 ),
-                onPressed: () {},
+                onPressed: onSave,
                 icon: const Icon(Icons.save_outlined,
                     size: 16, color: Colors.white),
                 label: Text('Save Form',

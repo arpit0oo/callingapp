@@ -1,6 +1,9 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../services/app_session.dart';
 import '../company_admin/admin_shell.dart';
 import '../manager/manager_shell.dart';
 import '../cold_caller/caller_shell.dart';
@@ -32,6 +35,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String? _emailError;
   String? _passwordError;
+  String? _authError;
 
   @override
   void dispose() {
@@ -59,6 +63,128 @@ class _LoginScreenState extends State<LoginScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
+  }
+
+  // ── Real Firebase Auth sign-in ────────────────────────────────
+  Future<void> _signIn() async {
+    // Clear previous errors
+    setState(() {
+      _emailError = null;
+      _passwordError = null;
+      _authError = null;
+    });
+
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text;
+
+    // Basic client-side validation
+    if (email.isEmpty) {
+      setState(() => _emailError = 'Email is required.');
+      return;
+    }
+    if (password.isEmpty) {
+      setState(() => _passwordError = 'Password is required.');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. Firebase Auth
+      final credential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: password);
+      final user = credential.user!;
+
+      // 2. Direct document fetch at tenants/xperttutor/users/{uid}.
+      //    tenantId is hardcoded as "xperttutor" for now; replace with a
+      //    real multi-tenant lookup when that feature is implemented.
+      const tenantId = 'xperttutor';
+      final userDocSnap = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(tenantId)
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (!userDocSnap.exists) {
+        await FirebaseAuth.instance.signOut();
+        setState(() {
+          _isLoading = false;
+          _authError = 'User profile not found. Contact your administrator.';
+        });
+        return;
+      }
+
+      final data = userDocSnap.data()!;
+
+      // 3. Hydrate AppSession
+      AppSession.tenantId = tenantId;
+      AppSession.userId   = user.uid;
+      AppSession.role     = (data['role'] as String? ?? '').toLowerCase();
+
+      final assignedCampaigns =
+          (data['assignedCampaigns'] as List<dynamic>? ?? []);
+      AppSession.campaignId =
+          assignedCampaigns.isNotEmpty ? assignedCampaigns.first as String : '';
+
+      if (!mounted) return;
+
+      // 4. Role-based navigation
+      switch (AppSession.role) {
+        case AppRoles.companyAdmin:
+          _goTo(AdminShell(key: AdminShell.shellKey));
+          break;
+        case AppRoles.manager:
+          _goTo(ManagerShell(key: ManagerShell.shellKey));
+          break;
+        case AppRoles.coldCaller:
+          _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold'));
+          break;
+        case AppRoles.warmCaller:
+          _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm'));
+          break;
+        case AppRoles.superAdmin:
+          _goTo(SuperAdminShell(key: SuperAdminShell.shellKey));
+          break;
+        default:
+          setState(() {
+            _isLoading = false;
+            _authError = 'Unknown role "${AppSession.role}". Contact your administrator.';
+          });
+      }
+    } on FirebaseAuthException catch (e) {
+      String message;
+      switch (e.code) {
+        case 'user-not-found':
+        case 'invalid-email':
+          message = 'No account found for this email.';
+          _emailError = message;
+          break;
+        case 'wrong-password':
+        case 'invalid-credential':
+          message = 'Incorrect password. Please try again.';
+          _passwordError = message;
+          break;
+        case 'user-disabled':
+          message = 'This account has been disabled.';
+          break;
+        case 'too-many-requests':
+          message = 'Too many failed attempts. Please try again later.';
+          break;
+        default:
+          message = e.message ?? 'Sign-in failed. Please try again.';
+      }
+      setState(() {
+        _isLoading = false;
+        _authError = message;
+      });
+    } catch (e) {
+      // Non-auth errors (Firestore, network, etc.) should not produce a
+      // user-facing message on the login screen. Reset loading state and
+      // re-throw so Flutter's error reporting / crash tools can capture it.
+      setState(() => _isLoading = false);
+      rethrow;
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────
@@ -158,6 +284,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 24),
+
+                    // ── Real Sign In button ───────────────────
+                    _buildSignInButton(),
+                    if (_authError != null) _buildAuthError(_authError!),
                     const SizedBox(height: 24),
 
                     // ── Quick Access (Testing) ────────────────
@@ -264,6 +395,49 @@ class _LoginScreenState extends State<LoginScreen> {
               fontSize: 12,
               color: _errorRed,
               fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSignInButton() {
+    return _isLoading
+        ? const SizedBox(
+            height: 48,
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+            ),
+          )
+        : _RoleButton(
+            label: 'Sign In',
+            color: _primary,
+            textColor: Colors.white,
+            onTap: _signIn,
+          );
+  }
+
+  Widget _buildAuthError(String message) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline, size: 14, color: _errorRed),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              message,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: _errorRed,
+                fontWeight: FontWeight.w400,
+              ),
             ),
           ),
         ],

@@ -467,12 +467,11 @@ class _FirestoreActionButtons extends StatelessWidget {
           tooltip: 'Edit Form',
           color: _kBlue,
           onTap: () {
-            // TODO: Pass campaignId to FormBuilderContent once it accepts the parameter
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => const Scaffold(
-                  body: FormBuilderContent(),
+                builder: (_) => Scaffold(
+                  body: FormBuilderContent(campaignId: doc.id),
                 ),
               ),
             );
@@ -485,12 +484,11 @@ class _FirestoreActionButtons extends StatelessWidget {
           tooltip: 'Settings',
           color: _kTextLight,
           onTap: () {
-            // TODO: Pass campaignId to CampaignSettingsContent once it accepts the parameter
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => const Scaffold(
-                  body: CampaignSettingsContent(),
+                builder: (_) => Scaffold(
+                  body: CampaignSettingsContent(campaignId: doc.id),
                 ),
               ),
             );

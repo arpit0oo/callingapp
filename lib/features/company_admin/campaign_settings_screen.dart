@@ -1,5 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import '../../services/app_session.dart';
 
 const _kBlue = Color(0xFF1A73E8);
 const _kGreen = Color(0xFF34A853);
@@ -44,7 +47,12 @@ class _Disposition {
 //  Root widget
 // ─────────────────────────────────────────────
 class CampaignSettingsContent extends StatefulWidget {
-  const CampaignSettingsContent({super.key});
+  const CampaignSettingsContent({
+    super.key,
+    required this.campaignId,
+  });
+
+  final String campaignId;
 
   @override
   State<CampaignSettingsContent> createState() =>
@@ -53,7 +61,7 @@ class CampaignSettingsContent extends StatefulWidget {
 
 class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
   // Dispositions
-  final List<_Disposition> _dispositions = [
+  List<_Disposition> _dispositions = [
     _Disposition(label: 'Interested',      color: _kGreen,  requiresNote: true,  callback: false),
     _Disposition(label: 'WTL',             color: _kBlue,   requiresNote: true,  callback: true),
     _Disposition(label: 'CBL',             color: _kBlue,   requiresNote: false, callback: true),
@@ -83,6 +91,113 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
   static const _dotColors = [_kGreen, _kBlue, _kRed, _kOrange, _kGrey];
 
   @override
+  void initState() {
+    super.initState();
+    _loadFromFirestore();
+  }
+
+  Future<void> _loadFromFirestore() async {
+    final tenantId = AppSession.tenantId;
+    final campaignId = widget.campaignId;
+    final db = FirebaseFirestore.instance;
+
+    // Load campaign doc (retry logic + webhook)
+    final campaignDoc = await db
+        .collection('tenants')
+        .doc(tenantId)
+        .collection('campaigns')
+        .doc(campaignId)
+        .get();
+
+    if (campaignDoc.exists) {
+      final d = campaignDoc.data()!;
+      setState(() {
+        _maxRetries = (d['maxRetries'] as num?)?.toInt() ?? _maxRetries;
+        _retryAfter  = (d['retryAfter']  as num?)?.toInt() ?? _retryAfter;
+        _dailyLimit  = (d['dailyLimit']  as num?)?.toInt() ?? _dailyLimit;
+        _webhookCtrl.text = d['webhookUrl']   as String? ?? '';
+        _secretCtrl.text  = d['webhookSecret'] as String? ?? '';
+        final t = d['webhookTrigger'] as String?;
+        if (t != null && _triggers.contains(t)) _trigger = t;
+      });
+    }
+
+    // Load dispositions
+    final dispSnap = await db
+        .collection('tenants')
+        .doc(tenantId)
+        .collection('campaigns')
+        .doc(campaignId)
+        .collection('disposition_config')
+        .orderBy('order')
+        .get();
+
+    if (dispSnap.docs.isNotEmpty) {
+      final loaded = dispSnap.docs.map((doc) {
+        final d = doc.data();
+        final colorVal = (d['color'] as num?)?.toInt() ?? _kGrey.value;
+        return _Disposition(
+          label: d['label'] as String? ?? doc.id,
+          color: Color(colorVal),
+          requiresNote: d['requiresNote'] as bool? ?? false,
+          callback: d['requiresCallback'] as bool? ?? false,
+        );
+      }).toList();
+      setState(() => _dispositions = loaded);
+    }
+  }
+
+  Future<void> _saveToFirestore() async {
+    final tenantId = AppSession.tenantId;
+    final campaignId = widget.campaignId;
+    final db = FirebaseFirestore.instance;
+
+    // Write retry logic + webhook to campaign doc
+    await db
+        .collection('tenants')
+        .doc(tenantId)
+        .collection('campaigns')
+        .doc(campaignId)
+        .update({
+      'maxRetries':      _maxRetries,
+      'retryAfter':      _retryAfter,
+      'dailyLimit':      _dailyLimit,
+      'webhookUrl':      _webhookCtrl.text.trim(),
+      'webhookSecret':   _secretCtrl.text.trim(),
+      'webhookTrigger':  _trigger,
+      'updatedAt':       FieldValue.serverTimestamp(),
+    });
+
+    // Batch-write dispositions to disposition_config subcollection
+    final batch = db.batch();
+    final dispCol = db
+        .collection('tenants')
+        .doc(tenantId)
+        .collection('campaigns')
+        .doc(campaignId)
+        .collection('disposition_config');
+
+    for (int i = 0; i < _dispositions.length; i++) {
+      final disp = _dispositions[i];
+      final docRef = dispCol.doc(disp.label);
+      batch.set(docRef, {
+        'label':            disp.label,
+        'color':            disp.color.value,
+        'requiresNote':     disp.requiresNote,
+        'requiresCallback': disp.callback,
+        'order':            i,
+      });
+    }
+    await batch.commit();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Settings saved.')),
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _newLabelCtrl.dispose();
     _webhookCtrl.dispose();
@@ -100,7 +215,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
           // ── Top Bar ─────────────────────────────
           Row(children: [
             IconButton(
-              onPressed: () {},
+              onPressed: () => Navigator.pop(context),
               icon: const Icon(Icons.arrow_back, size: 20, color: _kTextLight),
               style: IconButton.styleFrom(
                 backgroundColor: Colors.white,
@@ -173,6 +288,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
                   onToggleSecret: () =>
                       setState(() => _secretVisible = !_secretVisible),
                   onTriggerChanged: (v) => setState(() => _trigger = v!),
+                  onSave: _saveToFirestore,
                 ),
               ]),
             ),
@@ -539,6 +655,7 @@ class _WebhookCard extends StatelessWidget {
     required this.triggers,
     required this.onToggleSecret,
     required this.onTriggerChanged,
+    required this.onSave,
   });
 
   final TextEditingController webhookCtrl, secretCtrl;
@@ -547,6 +664,7 @@ class _WebhookCard extends StatelessWidget {
   final List<String> triggers;
   final VoidCallback onToggleSecret;
   final ValueChanged<String?> onTriggerChanged;
+  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -633,7 +751,7 @@ class _WebhookCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 13),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
-              onPressed: () {},
+              onPressed: onSave,
               icon: const Icon(Icons.save_outlined, size: 16, color: Colors.white),
               label: Text('Save Settings',
                   style: _inter(13, weight: FontWeight.w600, color: Colors.white)),
