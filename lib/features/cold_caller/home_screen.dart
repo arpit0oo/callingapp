@@ -216,8 +216,14 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
             role: widget.role,
           ),
           const SizedBox(height: 8),
-          StreamBuilder<DatabaseEvent>(
-            stream: RtdbService.watchQueueCounts(AppSession.tenantId, AppSession.campaignId),
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('tenants')
+                .doc(AppSession.tenantId)
+                .collection('leads')
+                .where('campaignId', isEqualTo: AppSession.campaignId)
+                .where('status', isEqualTo: 'raw')
+                .snapshots(),
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
                 return Text(
@@ -230,15 +236,9 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
                   ),
                 );
               }
-              final data = snapshot.data?.snapshot.value as Map?;
-              final rawPending = data?['rawPending'] ?? 0;
-              final warmPending = data?['warmPending'] ?? 0;
-              final count = widget.role == 'warm' ? warmPending : rawPending;
-              
+              final count = snapshot.data!.size;
               return Text(
-                widget.role == 'warm'
-                    ? '$count callbacks remaining in queue'
-                    : '$count leads remaining in queue',
+                '$count leads remaining in queue',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.inter(
                   fontSize: 13,
@@ -381,6 +381,16 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
 
   Future<void> _handleTap() async {
     if (_loading) return;
+
+    if (AppSession.campaignId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No campaign assigned. Contact your manager.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _loading = true);
 
     try {
@@ -404,6 +414,7 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
           },
         );
         if (!mounted) return;
+        CallerShell.shellKey.currentState?.setCurrentLead(lead);
         CallerShell.shellKey.currentState?.navigateTo(1);
       } else {
         // No lead returned

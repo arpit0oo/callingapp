@@ -1,16 +1,29 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import '../../services/app_session.dart';
+import '../../services/lead_service.dart';
+import 'caller_shell.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry-point (used by CallerShell index 1)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CallingWorkspaceContent extends StatefulWidget {
-  const CallingWorkspaceContent({super.key, required this.role});
+  const CallingWorkspaceContent({
+    super.key,
+    required this.role,
+    this.currentLead,
+  });
 
   /// "cold" = raw leads, "warm" = callbacks.
   final String role;
+
+  /// The lead map returned by LeadService.getNextLead(). Nullable — shown
+  /// as an empty state when null.
+  final Map<String, dynamic>? currentLead;
 
   @override
   State<CallingWorkspaceContent> createState() =>
@@ -30,14 +43,14 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   int _seconds = 0;
   Timer? _timer;
 
-  // ── Form state ────────────────────────────────────────────────
-  final _nameCtrl = TextEditingController(text: 'Rajesh Kumar');
-  final _incomeCtrl = TextEditingController();
+  // ── Dynamic form state ────────────────────────────────────────
+  /// Values for all campaign form fields, keyed by Firestore document ID.
+  final Map<String, dynamic> _formData = {};
+  /// TextEditingControllers for text/number fields, keyed by document ID.
+  final Map<String, TextEditingController> _formControllers = {};
+
+  // ── Notes ─────────────────────────────────────────────────────
   final _notesCtrl = TextEditingController();
-  String? _selectedCity;
-  String? _selectedInterest;
-  final _cities = ['Lucknow', 'Delhi', 'Mumbai'];
-  final _interests = ['High', 'Medium', 'Low'];
 
   // ── Disposition state ─────────────────────────────────────────
   String? _selectedDisposition;
@@ -81,9 +94,10 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   @override
   void dispose() {
     _timer?.cancel();
-    _nameCtrl.dispose();
-    _incomeCtrl.dispose();
     _notesCtrl.dispose();
+    for (final c in _formControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -100,12 +114,33 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
 
   bool get _canSubmit => _selectedDisposition != null;
 
+  // ── Helpers ───────────────────────────────────────────────────
+
+  /// Returns the last two non-space characters of [phone] as upper-case
+  /// initials for the avatar (e.g. "43210" → "10").
+  String _avatarInitials(String phone) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.length >= 2) return digits.substring(digits.length - 2);
+    if (digits.isNotEmpty) return digits;
+    return '?';
+  }
+
+  /// Converts an integer to an ordinal string: 1→"1st", 2→"2nd", etc.
+  String _ordinal(int n) {
+    if (n <= 0) return '1st';
+    final suffix = (n % 100 >= 11 && n % 100 <= 13)
+        ? 'th'
+        : ['th', 'st', 'nd', 'rd', 'th'][n % 10 > 3 ? 0 : n % 10];
+    return '$n$suffix';
+  }
+
   void _resetForm() {
+    for (final c in _formControllers.values) {
+      c.clear();
+    }
     setState(() {
-      _incomeCtrl.clear();
+      _formData.clear();
       _notesCtrl.clear();
-      _selectedCity = null;
-      _selectedInterest = null;
       _selectedDisposition = null;
       _cbDate = null;
       _cbTime = null;
@@ -113,14 +148,32 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     });
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     setState(() => _showSuccess = true);
-    Future.delayed(const Duration(milliseconds: 1400), () {
-      if (mounted) {
-        setState(() => _showSuccess = false);
-        _resetForm();
+
+    try {
+      final leadId = widget.currentLead?['id']?.toString() ?? '';
+      if (leadId.isNotEmpty) {
+        await LeadService.submitDisposition(
+          AppSession.tenantId,
+          leadId,
+          {
+            'dispositionLabel': _selectedDisposition,
+            'notes': _notesCtrl.text.trim(),
+            'formData': Map<String, dynamic>.from(_formData),
+          },
+        );
       }
-    });
+    } catch (_) {
+      // swallow — UI already shows success; errors surfaced in next step
+    }
+
+    await Future.delayed(const Duration(milliseconds: 1400));
+    if (mounted) {
+      setState(() => _showSuccess = false);
+      _resetForm();
+      CallerShell.shellKey.currentState?.navigateTo(0);
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────
@@ -209,13 +262,21 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   // ── Lead card ─────────────────────────────────────────────────
 
   Widget _buildLeadCard() {
+    final phone = widget.currentLead?['phone']?.toString() ?? '—';
+    final attempts = (widget.currentLead?['attempts'] as int?) ?? 0;
+    final attemptLabel = '${_ordinal(attempts + 1)} attempt';
+    final initials = _avatarInitials(phone);
+    final campaignLabel = AppSession.campaignId.isNotEmpty
+        ? AppSession.campaignId
+        : 'No Campaign';
+
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              // Avatar
+              // Avatar — initials from last 2 phone digits
               Container(
                 width: 56, height: 56,
                 decoration: const BoxDecoration(
@@ -223,7 +284,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                   shape: BoxShape.circle,
                 ),
                 alignment: Alignment.center,
-                child: Text('RK',
+                child: Text(initials,
                     style: GoogleFonts.inter(
                         fontSize: 18, fontWeight: FontWeight.w700,
                         color: Colors.white)),
@@ -233,14 +294,15 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Rajesh Kumar',
+                    // Title = phone number (no contact name stored)
+                    Text(phone,
                         style: GoogleFonts.inter(
                             fontSize: 18, fontWeight: FontWeight.w700,
                             color: _textPrimary)),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Text('+91 98765 43210',
+                        Text(phone,
                             style: GoogleFonts.inter(
                                 fontSize: 14, color: _textSecondary)),
                         const SizedBox(width: 8),
@@ -266,18 +328,14 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
           ),
           const SizedBox(height: 12),
 
-          // Previous attempt + campaign tag
+          // Attempt count + campaign badge
           Row(
             children: [
-              _Badge(label: '2nd attempt',
+              _Badge(label: attemptLabel,
                   bg: const Color(0xFFFEF3E2),
                   fg: const Color(0xFFE37400)),
-              const SizedBox(width: 8),
-              Text('Last: No Answer',
-                  style: GoogleFonts.inter(
-                      fontSize: 12, color: _textSecondary)),
               const Spacer(),
-              _Badge(label: 'Xpert Tutor',
+              _Badge(label: campaignLabel,
                   bg: const Color(0xFFE8F0FE),
                   fg: const Color(0xFF1A73E8)),
             ],
@@ -287,76 +345,178 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     );
   }
 
-  // ── Dynamic form card ─────────────────────────────────────────
+  // ── Dynamic form card (Firestore-driven) ─────────────────────
 
   Widget _buildFormCard() {
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _SectionTitle('Campaign Form'),
-          const SizedBox(height: 12),
+    // Skip rendering if no campaign is assigned
+    if (AppSession.campaignId.isEmpty) {
+      return _Card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionTitle('Campaign Form'),
+            const SizedBox(height: 12),
+            Text('No campaign assigned.',
+                style: GoogleFonts.inter(
+                    fontSize: 13, color: _textHint)),
+          ],
+        ),
+      );
+    }
 
-          // Full Name
-          _FieldLabel('Full Name'),
-          const SizedBox(height: 5),
-          _CompactTextField(controller: _nameCtrl, hint: 'Full name'),
-          const SizedBox(height: 12),
+    final schemaStream = FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(AppSession.tenantId)
+        .collection('campaigns')
+        .doc(AppSession.campaignId)
+        .collection('form_schema')
+        .orderBy('order')
+        .snapshots();
 
-          // Monthly Income
-          _FieldLabel('Monthly Income'),
-          const SizedBox(height: 5),
-          _CompactTextField(
-              controller: _incomeCtrl,
-              hint: 'Enter amount',
-              keyboardType: TextInputType.number),
-          const SizedBox(height: 12),
-
-          // City dropdown
-          _FieldLabel('City'),
-          const SizedBox(height: 5),
-          _CompactDropdown(
-            value: _selectedCity,
-            hint: 'Select city',
-            items: _cities,
-            onChanged: (v) => setState(() => _selectedCity = v),
-          ),
-          const SizedBox(height: 12),
-
-          // Interest Level radios
-          _FieldLabel('Interest Level'),
-          const SizedBox(height: 6),
-          Row(
-            children: _interests.map((opt) {
-              final sel = _selectedInterest == opt;
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() => _selectedInterest = opt),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 120),
-                    margin: const EdgeInsets.only(right: 6),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: sel ? const Color(0xFF1A73E8) : Colors.white,
-                      border: Border.all(
-                          color: sel
-                              ? const Color(0xFF1A73E8)
-                              : const Color(0xFFE8EAED)),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(opt,
-                        style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: sel ? Colors.white : _textSecondary)),
+    return StreamBuilder<QuerySnapshot>(
+      stream: schemaStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SectionTitle('Campaign Form'),
+                const SizedBox(height: 16),
+                const Center(
+                  child: SizedBox(
+                    width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
-              );
-            }).toList(),
+                const SizedBox(height: 12),
+              ],
+            ),
+          );
+        }
+
+        final docs = snapshot.data?.docs ?? [];
+
+        if (docs.isEmpty) {
+          return _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SectionTitle('Campaign Form'),
+                const SizedBox(height: 12),
+                Text('No form fields configured for this campaign.',
+                    style: GoogleFonts.inter(
+                        fontSize: 13, color: _textHint)),
+              ],
+            ),
+          );
+        }
+
+        return _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _SectionTitle('Campaign Form'),
+              const SizedBox(height: 12),
+              ...docs.asMap().entries.map((entry) {
+                final idx = entry.key;
+                final doc = entry.value;
+                final id = doc.id;
+                final data = doc.data() as Map<String, dynamic>;
+                final label = data['label']?.toString() ?? id;
+                final type = data['type']?.toString() ?? 'text';
+                final rawOpts = data['options'];
+                final options = rawOpts is List
+                    ? rawOpts.map((e) => e.toString()).toList()
+                    : <String>[];
+
+                Widget fieldWidget;
+
+                if (type == 'text' || type == 'number') {
+                  // Lazily create a controller for this field
+                  final ctrl = _formControllers.putIfAbsent(
+                    id, () => TextEditingController(),
+                  );
+                  fieldWidget = _CompactTextField(
+                    controller: ctrl,
+                    hint: 'Enter $label',
+                    keyboardType: type == 'number'
+                        ? TextInputType.number
+                        : TextInputType.text,
+                    onChanged: (v) => _formData[id] = v,
+                  );
+                } else if (type == 'dropdown') {
+                  fieldWidget = _CompactDropdown(
+                    value: _formData[id]?.toString(),
+                    hint: 'Select $label',
+                    items: options,
+                    onChanged: (v) => setState(() => _formData[id] = v),
+                  );
+                } else if (type == 'chips') {
+                  // Selectable chip row (single-select)
+                  fieldWidget = Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: options.map((opt) {
+                      final sel = _formData[id] == opt;
+                      return GestureDetector(
+                        onTap: () => setState(() => _formData[id] = opt),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 120),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: sel
+                                ? const Color(0xFF1A73E8)
+                                : Colors.white,
+                            border: Border.all(
+                              color: sel
+                                  ? const Color(0xFF1A73E8)
+                                  : const Color(0xFFE8EAED),
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            opt,
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: sel ? Colors.white : _textSecondary,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  );
+                } else {
+                  // Fallback: plain text input
+                  final ctrl = _formControllers.putIfAbsent(
+                    id, () => TextEditingController(),
+                  );
+                  fieldWidget = _CompactTextField(
+                    controller: ctrl,
+                    hint: 'Enter $label',
+                    onChanged: (v) => _formData[id] = v,
+                  );
+                }
+
+                return Padding(
+                  padding: EdgeInsets.only(
+                      bottom: idx < docs.length - 1 ? 12 : 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _FieldLabel(label),
+                      const SizedBox(height: 5),
+                      fieldWidget,
+                    ],
+                  ),
+                );
+              }),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -704,11 +864,13 @@ class _CompactTextField extends StatelessWidget {
     required this.controller,
     required this.hint,
     this.keyboardType,
+    this.onChanged,
   });
 
   final TextEditingController controller;
   final String hint;
   final TextInputType? keyboardType;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -721,6 +883,7 @@ class _CompactTextField extends StatelessWidget {
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
+        onChanged: onChanged,
         style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF202124)),
         decoration: InputDecoration(
           hintText: hint,

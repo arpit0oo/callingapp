@@ -30,6 +30,14 @@ class CallerShell extends StatefulWidget {
 class CallerShellState extends State<CallerShell> {
   int _selectedIndex = 0;
 
+  /// Current lead being worked on by the caller.
+  Map<String, dynamic>? _currentLead;
+
+  /// Called from home_screen after getNextLead() returns a lead.
+  void setCurrentLead(Map<String, dynamic>? lead) {
+    setState(() => _currentLead = lead);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -92,7 +100,10 @@ class CallerShellState extends State<CallerShell> {
                     index: _selectedIndex,
                     children: [
                       CallerHomeContent(role: widget.role),
-                      CallingWorkspaceContent(role: widget.role),
+                      CallingWorkspaceContent(
+                        role: widget.role,
+                        currentLead: _currentLead,
+                      ),
                       PerformanceContent(role: widget.role),
                     ],
                   ),

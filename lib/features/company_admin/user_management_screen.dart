@@ -63,7 +63,16 @@ class _User {
   final String docId;
 }
 
+/// Lightweight pair used when building the campaign dropdown.
+class _CampaignItem {
+  const _CampaignItem({required this.id, required this.name});
+  final String id;
+  final String name;
+}
+
+/// Fallback shown when Firestore hasn't loaded yet.
 const _kCampaignsFallback = ['Xpert Tutor', 'Solar Campaign', 'DSA Campaign'];
+
 const _kRoles = ['Manager', 'Cold Caller', 'Warm Caller'];
 const _kStatuses = ['Active', 'Inactive'];
 const _kFilterTabs = ['All', 'Managers', 'Callers'];
@@ -93,7 +102,8 @@ class _UserManagementContentState extends State<UserManagementContent> {
   final _passwordCtrl = TextEditingController();
   bool _obscurePassword = true;
   String _selectedRole     = _kRoles.first;
-  String _selectedCampaign = _kCampaignsFallback.first;
+  /// Stores the Firestore campaign document ID (not the name).
+  String _selectedCampaign = '';
   String _selectedStatus   = _kStatuses.first;
 
   @override
@@ -114,7 +124,7 @@ class _UserManagementContentState extends State<UserManagementContent> {
     _passwordCtrl.clear();
     _obscurePassword = true;
     _selectedRole     = _kRoles.first;
-    _selectedCampaign = _kCampaignsFallback.first;
+    _selectedCampaign = '';        // no campaign pre-selected on create
     _selectedStatus   = _kStatuses.first;
     setState(() { _isEditMode = false; _editingUser = null; _editingDocId = ''; _panelOpen = true; });
   }
@@ -126,7 +136,9 @@ class _UserManagementContentState extends State<UserManagementContent> {
     _phoneCtrl.text = u.phone.replaceAll(RegExp(r'\D'), '');
     _passwordCtrl.clear(); // password not shown / edited in edit mode
     _selectedRole     = u.role;
-    _selectedCampaign = u.campaign == '\u2014' ? _kCampaignsFallback.first : u.campaign;
+    // u.campaign holds the first value from assignedCampaigns in Firestore,
+    // which is now a doc ID.  Fall back to '' if not set.
+    _selectedCampaign = u.campaign == '\u2014' ? '' : u.campaign;
     _selectedStatus   = u.status;
     setState(() { _isEditMode = true; _editingUser = u; _editingDocId = u.docId; _panelOpen = true; });
   }
@@ -854,14 +866,76 @@ class _UserPanelState extends State<_UserPanel> {
               StreamBuilder<QuerySnapshot>(
                 stream: CampaignService.getCampaigns(AppSession.tenantId),
                 builder: (context, snapshot) {
-                  final docs = snapshot.hasData ? snapshot.data!.docs : <QueryDocumentSnapshot>[];
-                  final campaigns = docs
-                      .map((d) => (d.data() as Map<String, dynamic>)['name'] as String? ?? '')
-                      .where((n) => n.isNotEmpty)
+                  if (!snapshot.hasData) {
+                    return const SizedBox(
+                      height: 44,
+                      child: Center(
+                        child: SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    );
+                  }
+
+                  final items = snapshot.data!.docs
+                      .map((d) {
+                        final data = d.data() as Map<String, dynamic>;
+                        final name = data['name'] as String? ?? '';
+                        return name.isNotEmpty
+                            ? _CampaignItem(id: d.id, name: name)
+                            : null;
+                      })
+                      .whereType<_CampaignItem>()
                       .toList();
-                  final items = campaigns.isEmpty ? _kCampaignsFallback : campaigns;
-                  final current = items.contains(widget.selectedCampaign) ? widget.selectedCampaign : items.first;
-                  return _Dropdown<String>(value: current, items: items, onChanged: widget.onCampaignChanged);
+
+                  if (items.isEmpty) {
+                    return Text(
+                      'No campaigns found.',
+                      style: _inter(13, color: _kGrey),
+                    );
+                  }
+
+                  // Ensure the current selection is valid; fall back to
+                  // the first campaign if the stored ID is gone.
+                  final validId = items.any((c) => c.id == widget.selectedCampaign)
+                      ? widget.selectedCampaign
+                      : items.first.id;
+
+                  // Notify parent if we had to correct the selection.
+                  if (validId != widget.selectedCampaign) {
+                    WidgetsBinding.instance.addPostFrameCallback(
+                      (_) => widget.onCampaignChanged(validId),
+                    );
+                  }
+
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _kBgPage,
+                      border: Border.all(color: _kBorder),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: validId,
+                        isExpanded: true,
+                        style: _inter(13),
+                        icon: const Icon(
+                          Icons.keyboard_arrow_down,
+                          size: 18,
+                          color: _kTextLight,
+                        ),
+                        onChanged: widget.onCampaignChanged,
+                        items: items
+                            .map((c) => DropdownMenuItem<String>(
+                                  value: c.id,       // saved value = doc ID
+                                  child: Text(c.name), // displayed = name
+                                ))
+                            .toList(),
+                      ),
+                    ),
+                  );
                 },
               ),
               const SizedBox(height: 18),
