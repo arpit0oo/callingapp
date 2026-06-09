@@ -14,12 +14,10 @@ class CallerHomeContent extends StatefulWidget {
   const CallerHomeContent({
     super.key,
     required this.role,
-    required this.onLeadAssigned,
   });
 
   /// "cold" = raw-lead caller, "warm" = callback caller.
   final String role;
-  final ValueChanged<Map<String, dynamic>> onLeadAssigned;
 
   @override
   State<CallerHomeContent> createState() => _CallerHomeContentState();
@@ -216,7 +214,6 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
         children: [
           _GetNextLeadButton(
             role: widget.role,
-            onLeadAssigned: widget.onLeadAssigned,
           ),
           const SizedBox(height: 8),
           StreamBuilder<DatabaseEvent>(
@@ -367,10 +364,8 @@ class _KpiCard extends StatelessWidget {
 class _GetNextLeadButton extends StatefulWidget {
   const _GetNextLeadButton({
     required this.role,
-    required this.onLeadAssigned,
   });
   final String role;
-  final ValueChanged<Map<String, dynamic>> onLeadAssigned;
 
   @override
   State<_GetNextLeadButton> createState() => _GetNextLeadButtonState();
@@ -409,7 +404,6 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
           },
         );
         if (!mounted) return;
-        widget.onLeadAssigned(lead);
         CallerShell.shellKey.currentState?.navigateTo(1);
       } else {
         // No lead returned
