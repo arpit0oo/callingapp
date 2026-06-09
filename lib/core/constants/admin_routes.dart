@@ -4,8 +4,6 @@ class AdminRoutes {
   static const users = 2;
   static const csvUpload = 3;
   static const settings = 4;
-  static const formBuilder = 5;
-  static const dispositionSettings = 6;
 }
 
 class ManagerRoutes {

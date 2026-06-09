@@ -1,8 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:callingapp/services/app_session.dart';
-import 'package:callingapp/services/campaign_service.dart';
 
 import '../../shared/widgets/status_badge.dart';
 import 'admin_shell.dart';
@@ -132,51 +129,16 @@ class _CampaignContentState extends State<CampaignContent> {
     }).toList();
   }
 
-  Future<void> _openCreate() async {
-    final nameController = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('New Campaign', style: _inter(16, weight: FontWeight.w600)),
-        content: SizedBox(
-          width: 360,
-          child: TextField(
-            controller: nameController,
-            autofocus: true,
-            style: _inter(13),
-            decoration: InputDecoration(
-              hintText: 'Campaign name',
-              hintStyle: _inter(13, color: _kGrey),
-              border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text('Cancel', style: _inter(13, color: _kTextLight)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _kBlue),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Create',
-                style: _inter(13, weight: FontWeight.w600, color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && nameController.text.trim().isNotEmpty) {
-      await CampaignService.createCampaign(AppSession.tenantId, {
-        'name': nameController.text.trim(),
-        'status': 'active',
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': AppSession.userId,
-      });
-    }
-    nameController.dispose();
+  void _openCreate() {
+    _nameCtrl.clear();
+    _descCtrl.clear();
+    _selectedManager = _kManagers.first;
+    _selectedStatus = _kStatuses.first;
+    setState(() {
+      _isEditMode = false;
+      _editingCampaign = null;
+      _panelOpen = true;
+    });
   }
 
   void _openEdit(_Campaign c) {
@@ -199,39 +161,14 @@ class _CampaignContentState extends State<CampaignContent> {
       color: _kBgPage,
       child: Stack(
         children: [
-          StreamBuilder<QuerySnapshot>(
-            stream: CampaignService.getCampaigns(AppSession.tenantId),
-            builder: (context, snapshot) {
-              // Determine live docs or fall back to dummy data
-              final liveDocs = snapshot.hasData
-                  ? snapshot.data!.docs
-                  : <QueryDocumentSnapshot>[];
-
-              // Apply search filter to live docs
-              final filteredDocs = liveDocs.where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final tab = _kFilterTabs[_activeFilter];
-                final name = (data['name'] as String? ?? '').toLowerCase();
-                final status = (data['status'] as String? ?? '');
-                final matchFilter = tab == 'All' ||
-                    status.toLowerCase() == tab.toLowerCase();
-                final matchSearch = _searchQuery.isEmpty ||
-                    name.contains(_searchQuery.toLowerCase());
-                return matchFilter && matchSearch;
-              }).toList();
-
-              return _MainContent(
-                campaigns: _filtered,           // dummy fallback for panel
-                liveDocs: filteredDocs,
-                useLive: snapshot.hasData,
-                activeFilter: _activeFilter,
-                searchCtrl: _searchCtrl,
-                onSearchChanged: (v) => setState(() => _searchQuery = v),
-                onFilterChanged: (i) => setState(() => _activeFilter = i),
-                onNewCampaign: _openCreate,
-                onEdit: _openEdit,
-              );
-            },
+          _MainContent(
+            campaigns: _filtered,
+            activeFilter: _activeFilter,
+            searchCtrl: _searchCtrl,
+            onSearchChanged: (v) => setState(() => _searchQuery = v),
+            onFilterChanged: (i) => setState(() => _activeFilter = i),
+            onNewCampaign: _openCreate,
+            onEdit: _openEdit,
           ),
           // ── Dim overlay ──────────────────────────
           if (_panelOpen)
@@ -279,8 +216,6 @@ class _CampaignContentState extends State<CampaignContent> {
 class _MainContent extends StatelessWidget {
   const _MainContent({
     required this.campaigns,
-    required this.liveDocs,
-    required this.useLive,
     required this.activeFilter,
     required this.searchCtrl,
     required this.onSearchChanged,
@@ -290,8 +225,6 @@ class _MainContent extends StatelessWidget {
   });
 
   final List<_Campaign> campaigns;
-  final List<QueryDocumentSnapshot> liveDocs;
-  final bool useLive;
   final int activeFilter;
   final TextEditingController searchCtrl;
   final ValueChanged<String> onSearchChanged;
@@ -416,9 +349,7 @@ class _MainContent extends StatelessWidget {
                 const Divider(color: _kBorder, height: 1),
 
                 // ── Table ─────────────────────────
-                useLive
-                    ? _LiveCampaignTable(docs: liveDocs)
-                    : _CampaignTable(campaigns: campaigns, onEdit: onEdit),
+                _CampaignTable(campaigns: campaigns, onEdit: onEdit),
               ],
             ),
           ),
@@ -429,82 +360,7 @@ class _MainContent extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-//  Live Campaign Table (Firestore-backed)
-// ─────────────────────────────────────────────
-class _LiveCampaignTable extends StatelessWidget {
-  const _LiveCampaignTable({required this.docs});
-  final List<QueryDocumentSnapshot> docs;
-
-  static const _columns = [
-    'Campaign Name',
-    'Status',
-    'Raw Leads',
-    'Created Date',
-    'Actions',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    if (docs.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 48),
-        child: Center(
-          child: Text('No campaigns found.',
-              style: _inter(14, color: _kGrey)),
-        ),
-      );
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minWidth: constraints.maxWidth),
-            child: DataTable(
-              headingRowHeight: 44,
-              dataRowMinHeight: 56,
-              dataRowMaxHeight: 56,
-              columnSpacing: 24,
-              headingTextStyle:
-                  _inter(12, weight: FontWeight.w600, color: _kTextLight),
-              dataTextStyle: _inter(13),
-              columns:
-                  _columns.map((c) => DataColumn(label: Text(c))).toList(),
-              rows: docs.map((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final name = data['name'] as String? ?? '—';
-                final status = data['status'] as String? ?? 'active';
-                final rawCount =
-                    (data['rawQueueCount'] as int? ?? 0).toString();
-                final ts = data['createdAt'] as Timestamp?;
-                final createdDate = ts != null
-                    ? '${ts.toDate().day}/${ts.toDate().month}/${ts.toDate().year}'
-                    : '—';
-                final isActive = status == 'active';
-                return DataRow(cells: [
-                  DataCell(Text(name,
-                      style: _inter(13, weight: FontWeight.w500))),
-                  DataCell(StatusBadge(
-                    label: isActive ? 'Active' : 'Paused',
-                    color: isActive ? _kGreen : _kGrey,
-                  )),
-                  DataCell(Text(rawCount)),
-                  DataCell(
-                      Text(createdDate, style: _inter(13, color: _kTextLight))),
-                  DataCell(_LiveActionButtons(
-                      docId: doc.id, currentStatus: status)),
-                ]);
-              }).toList(),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-//  Dummy Campaign Table (fallback)
+//  Campaign Table
 // ─────────────────────────────────────────────
 class _CampaignTable extends StatelessWidget {
   const _CampaignTable({required this.campaigns, required this.onEdit});
@@ -560,11 +416,14 @@ class _CampaignTable extends StatelessWidget {
   DataRow _buildRow(_Campaign c) {
     final isActive = c.status == 'Active';
     return DataRow(cells: [
+      // Campaign Name
       DataCell(Text(c.name, style: _inter(13, weight: FontWeight.w500))),
+      // Status — reused shared StatusBadge
       DataCell(StatusBadge(
         label: c.status,
         color: isActive ? _kGreen : _kGrey,
       )),
+      // Manager
       DataCell(Row(children: [
         CircleAvatar(
           radius: 13,
@@ -575,57 +434,18 @@ class _CampaignTable extends StatelessWidget {
         const SizedBox(width: 8),
         Text(c.manager),
       ])),
+      // Raw Leads
       DataCell(Text(c.rawLeads)),
+      // Created Date
       DataCell(Text(c.createdDate, style: _inter(13, color: _kTextLight))),
+      // Actions
       DataCell(_ActionButtons(campaign: c, onEdit: onEdit)),
     ]);
   }
 }
 
 // ─────────────────────────────────────────────
-//  Live Action Buttons (Firestore-backed)
-// ─────────────────────────────────────────────
-class _LiveActionButtons extends StatelessWidget {
-  const _LiveActionButtons({
-    required this.docId,
-    required this.currentStatus,
-  });
-
-  final String docId;
-  final String currentStatus;
-
-  @override
-  Widget build(BuildContext context) {
-    final isPaused = currentStatus == 'paused';
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _IconBtn(
-          icon: Icons.settings_outlined,
-          tooltip: 'Settings',
-          color: _kTextLight,
-          onTap: () {},
-        ),
-        const SizedBox(width: 4),
-        _IconBtn(
-          icon: isPaused
-              ? Icons.play_circle_outline
-              : Icons.pause_circle_outline,
-          tooltip: isPaused ? 'Resume' : 'Pause',
-          color: isPaused ? _kGreen : const Color(0xFFFA7B17),
-          onTap: () => CampaignService.setCampaignStatus(
-            AppSession.tenantId,
-            docId,
-            isPaused ? 'active' : 'paused',
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-//  Dummy Action Buttons (fallback)
+//  Action Buttons (Edit / Settings / Pause|Resume)
 // ─────────────────────────────────────────────
 class _ActionButtons extends StatelessWidget {
   const _ActionButtons({required this.campaign, required this.onEdit});
@@ -639,6 +459,7 @@ class _ActionButtons extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Edit
         _IconBtn(
           icon: Icons.edit_outlined,
           tooltip: 'Edit',
@@ -646,6 +467,7 @@ class _ActionButtons extends StatelessWidget {
           onTap: () => onEdit(campaign),
         ),
         const SizedBox(width: 4),
+        // Settings
         _IconBtn(
           icon: Icons.settings_outlined,
           tooltip: 'Settings',
@@ -653,6 +475,7 @@ class _ActionButtons extends StatelessWidget {
           onTap: () {},
         ),
         const SizedBox(width: 4),
+        // Pause / Resume
         _IconBtn(
           icon: isPaused
               ? Icons.play_circle_outline
