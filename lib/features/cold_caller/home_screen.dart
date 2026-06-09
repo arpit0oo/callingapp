@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/app_session.dart';
 import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
+import '../auth/login_screen.dart';
 import 'caller_shell.dart';
 
 /// Home screen for Cold Caller (role="cold") and Warm Caller (role="warm").
@@ -30,6 +31,71 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   static const _textPrimary = Color(0xFF202124);
   static const _textSecondary = Color(0xFF5F6368);
   static const _textHint = Color(0xFF9AA0A6);
+
+  // ── End Shift ─────────────────────────────────────────────────
+
+  Future<void> _handleEndShift() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'End Shift?',
+          style: GoogleFonts.inter(
+            fontWeight: FontWeight.w700,
+            fontSize: 17,
+            color: const Color(0xFF202124),
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to end your shift?',
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            color: const Color(0xFF5F6368),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF5F6368),
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'End Shift',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFFD93025),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    await RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'offline',
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
+
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -123,7 +189,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
               ),
               // End Shift button
               OutlinedButton(
-                onPressed: () {},
+                onPressed: _handleEndShift,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white,
                   side: const BorderSide(color: Colors.white70, width: 1.2),

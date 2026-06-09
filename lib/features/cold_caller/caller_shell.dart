@@ -10,9 +10,10 @@ import 'performance_screen.dart';
 
 /// Mobile shell for Cold Caller / Warm Caller roles.
 /// [role] must be "cold" or "warm".
-/// Renders a bottom navigation bar with 3 tabs and an [IndexedStack] body.
-/// Max-width 420 px, centred on a grey (#F0F0F0) background — simulates a
-/// phone screen on web/desktop.
+/// Renders a bottom navigation bar with 2 visible tabs (Home, Performance)
+/// and an [IndexedStack] body with 3 children:
+///   index 0 = Home, index 1 = Workspace (hidden from nav), index 2 = Performance.
+/// [navigateTo](1) from the Get Next Lead button switches to the Workspace.
 class CallerShell extends StatefulWidget {
   const CallerShell({super.key, required this.role});
 
@@ -64,22 +65,20 @@ class CallerShellState extends State<CallerShell> {
   /// Programmatically switch to any tab by index.
   void navigateTo(int index) => setState(() => _selectedIndex = index);
 
-  // ── Nav-bar items ─────────────────────────────────────────────
-  static const _navItems = [
+  // ── Nav-bar items (visible tabs only — Workspace is hidden) ──
+  // Each entry pairs the display data with the IndexedStack index it targets.
+  static const _navBarItems = [
     _NavItem(
       label: 'Home',
       icon: Icons.home_outlined,
       activeIcon: Icons.home,
-    ),
-    _NavItem(
-      label: 'Workspace',
-      icon: Icons.headset_mic_outlined,
-      activeIcon: Icons.headset_mic,
+      stackIndex: 0,
     ),
     _NavItem(
       label: 'Performance',
       icon: Icons.bar_chart_outlined,
       activeIcon: Icons.bar_chart,
+      stackIndex: 2,
     ),
   ];
 
@@ -129,12 +128,11 @@ class CallerShellState extends State<CallerShell> {
         ),
       ),
       child: Row(
-        children: List.generate(_navItems.length, (i) {
-          final item = _navItems[i];
-          final selected = i == _selectedIndex;
+        children: _navBarItems.map((item) {
+          final selected = _selectedIndex == item.stackIndex;
           return Expanded(
             child: InkWell(
-              onTap: () => navigateTo(i),
+              onTap: () => navigateTo(item.stackIndex),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -157,7 +155,7 @@ class CallerShellState extends State<CallerShell> {
               ),
             ),
           );
-        }),
+        }).toList(),
       ),
     );
   }
@@ -172,9 +170,12 @@ class _NavItem {
     required this.label,
     required this.icon,
     required this.activeIcon,
+    required this.stackIndex,
   });
 
   final String label;
   final IconData icon;
   final IconData activeIcon;
+  /// The [IndexedStack] index this tab switches to.
+  final int stackIndex;
 }
