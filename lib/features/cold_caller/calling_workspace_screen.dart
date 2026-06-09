@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
@@ -48,6 +49,10 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   final Map<String, dynamic> _formData = {};
   /// TextEditingControllers for text/number fields, keyed by document ID.
   final Map<String, TextEditingController> _formControllers = {};
+  /// IDs of fields where required == true (populated from Firestore schema).
+  final Set<String> _requiredFields = {};
+  /// IDs of required fields that were empty on the last failed submit attempt.
+  final Set<String> _invalidFieldIds = {};
   /// Fetched once in initState — avoids refetching on every timer rebuild.
   Future<QuerySnapshot>? _schemaFuture;
 
@@ -153,6 +158,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     }
     setState(() {
       _formData.clear();
+      _invalidFieldIds.clear();
       _notesCtrl.clear();
       _selectedDisposition = null;
       _cbDate = null;
@@ -162,6 +168,37 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   }
 
   Future<void> _submit() async {
+    // ── Required-field validation ──────────────────────────────
+    final missing = <String>{};
+    for (final fieldId in _requiredFields) {
+      final value = _formData[fieldId];
+      final isEmpty = value == null ||
+          (value is String && value.trim().isEmpty);
+      if (isEmpty) missing.add(fieldId);
+    }
+
+    if (missing.isNotEmpty) {
+      setState(() => _invalidFieldIds
+        ..clear()
+        ..addAll(missing));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please fill all required fields'),
+            backgroundColor: Color(0xFFD93025),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return; // abort — button stays enabled
+    }
+
+    // Clear any previous error highlights before submitting
+    if (_invalidFieldIds.isNotEmpty) {
+      setState(() => _invalidFieldIds.clear());
+    }
+
     setState(() => _showSuccess = true);
 
     try {
@@ -433,68 +470,183 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                 final data = doc.data() as Map<String, dynamic>;
                 final label = data['label']?.toString() ?? id;
                 final type = data['type']?.toString() ?? 'text';
+                final isRequired = data['required'] == true;
                 final rawOpts = data['options'];
                 final options = rawOpts is List
                     ? rawOpts.map((e) => e.toString()).toList()
                     : <String>[];
 
+                // Register required fields so _submit() can validate them.
+                if (isRequired) _requiredFields.add(id);
+
+                final hasError = _invalidFieldIds.contains(id);
                 Widget fieldWidget;
 
                 final typeLower = type.toLowerCase();
 
-                if (typeLower == 'text' || typeLower == 'text input' || typeLower == 'number') {
+                if (typeLower == 'text' || typeLower == 'text input') {
                   final ctrl = _formControllers.putIfAbsent(
                     id, () => TextEditingController(),
                   );
                   fieldWidget = _CompactTextField(
                     controller: ctrl,
                     hint: 'Enter $label',
-                    keyboardType: typeLower == 'number'
-                        ? TextInputType.number
-                        : TextInputType.text,
-                    onChanged: (v) => _formData[id] = v,
+                    keyboardType: TextInputType.text,
+                    hasError: hasError,
+                    onChanged: (v) {
+                      _formData[id] = v;
+                      if (hasError && v.trim().isNotEmpty) {
+                        setState(() => _invalidFieldIds.remove(id));
+                      }
+                    },
+                  );
+                } else if (typeLower == 'number') {
+                  final ctrl = _formControllers.putIfAbsent(
+                    id, () => TextEditingController(),
+                  );
+                  fieldWidget = _CompactTextField(
+                    controller: ctrl,
+                    hint: 'Enter $label',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    hasError: hasError,
+                    onChanged: (v) {
+                      _formData[id] = v;
+                      if (hasError && v.trim().isNotEmpty) {
+                        setState(() => _invalidFieldIds.remove(id));
+                      }
+                    },
+                  );
+                } else if (typeLower == 'date') {
+                  final selected = _formData[id]?.toString();
+                  fieldWidget = GestureDetector(
+                    onTap: () async {
+                      final now = DateTime.now();
+                      final pickedDate = await showDatePicker(
+                        context: context,
+                        initialDate: now,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                      );
+                      if (pickedDate == null || !mounted) return;
+                      final pickedTime = await showTimePicker(
+                        context: context,
+                        initialTime: TimeOfDay.fromDateTime(now),
+                      );
+                      if (!mounted) return;
+                      final timeStr = pickedTime != null
+                          ? '${pickedTime.hour.toString().padLeft(2, '0')}:${pickedTime.minute.toString().padLeft(2, '0')}'
+                          : '00:00';
+                      final combined =
+                          '${pickedDate.year.toString().padLeft(4, '0')}-'
+                          '${pickedDate.month.toString().padLeft(2, '0')}-'
+                          '${pickedDate.day.toString().padLeft(2, '0')} '
+                          '$timeStr';
+                      setState(() {
+                        _formData[id] = combined;
+                        _invalidFieldIds.remove(id);
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 11),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: hasError
+                              ? const Color(0xFFD93025)
+                              : const Color(0xFFE8EAED),
+                          width: hasError ? 1.5 : 1.0,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                        color: hasError
+                            ? const Color(0xFFFCE8E6)
+                            : Colors.white,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.calendar_today_outlined,
+                            size: 15,
+                            color: hasError
+                                ? const Color(0xFFD93025)
+                                : const Color(0xFF9AA0A6),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              selected ?? 'Select date & time',
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                color: selected != null
+                                    ? const Color(0xFF202124)
+                                    : const Color(0xFF9AA0A6),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   );
                 } else if (typeLower == 'dropdown') {
                   fieldWidget = _CompactDropdown(
                     value: _formData[id]?.toString(),
                     hint: 'Select $label',
                     items: options,
-                    onChanged: (v) => setState(() => _formData[id] = v),
+                    hasError: hasError,
+                    onChanged: (v) => setState(() {
+                      _formData[id] = v;
+                      _invalidFieldIds.remove(id);
+                    }),
                   );
                 } else if (typeLower == 'radio' || typeLower == 'radio button' || typeLower == 'chips') {
-                  fieldWidget = Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: options.map((opt) {
-                      final sel = _formData[id] == opt;
-                      return GestureDetector(
-                        onTap: () => setState(() => _formData[id] = opt),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 120),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: sel
-                                ? const Color(0xFF1A73E8)
-                                : Colors.white,
+                  fieldWidget = Container(
+                    padding: hasError
+                        ? const EdgeInsets.all(6)
+                        : EdgeInsets.zero,
+                    decoration: hasError
+                        ? BoxDecoration(
                             border: Border.all(
+                                color: const Color(0xFFD93025), width: 1.5),
+                            borderRadius: BorderRadius.circular(8),
+                          )
+                        : null,
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: options.map((opt) {
+                        final sel = _formData[id] == opt;
+                        return GestureDetector(
+                          onTap: () => setState(() {
+                            _formData[id] = opt;
+                            _invalidFieldIds.remove(id);
+                          }),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 120),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 8),
+                            decoration: BoxDecoration(
                               color: sel
                                   ? const Color(0xFF1A73E8)
-                                  : const Color(0xFFE8EAED),
+                                  : Colors.white,
+                              border: Border.all(
+                                color: sel
+                                    ? const Color(0xFF1A73E8)
+                                    : const Color(0xFFE8EAED),
+                              ),
+                              borderRadius: BorderRadius.circular(20),
                             ),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            opt,
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: sel ? Colors.white : _textSecondary,
+                            child: Text(
+                              opt,
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: sel ? Colors.white : _textSecondary,
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    }).toList(),
+                        );
+                      }).toList(),
+                    ),
                   );
                 } else {
                   final ctrl = _formControllers.putIfAbsent(
@@ -503,7 +655,13 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                   fieldWidget = _CompactTextField(
                     controller: ctrl,
                     hint: 'Enter $label',
-                    onChanged: (v) => _formData[id] = v,
+                    hasError: hasError,
+                    onChanged: (v) {
+                      _formData[id] = v;
+                      if (hasError && v.trim().isNotEmpty) {
+                        setState(() => _invalidFieldIds.remove(id));
+                      }
+                    },
                   );
                 }
 
@@ -513,7 +671,19 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _FieldLabel(label),
+                      Row(
+                        children: [
+                          _FieldLabel(label),
+                          if (isRequired) ...[
+                            const SizedBox(width: 3),
+                            const Text('*',
+                                style: TextStyle(
+                                    color: Color(0xFFD93025),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ],
+                      ),
                       const SizedBox(height: 5),
                       fieldWidget,
                     ],
@@ -871,25 +1041,35 @@ class _CompactTextField extends StatelessWidget {
     required this.controller,
     required this.hint,
     this.keyboardType,
+    this.inputFormatters,
+    this.hasError = false,
     this.onChanged,
   });
 
   final TextEditingController controller;
   final String hint;
   final TextInputType? keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
+  final bool hasError;
   final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFFE8EAED)),
+        border: Border.all(
+          color: hasError
+              ? const Color(0xFFD93025)
+              : const Color(0xFFE8EAED),
+          width: hasError ? 1.5 : 1.0,
+        ),
         borderRadius: BorderRadius.circular(8),
-        color: Colors.white,
+        color: hasError ? const Color(0xFFFCE8E6) : Colors.white,
       ),
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
         onChanged: onChanged,
         style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF202124)),
         decoration: InputDecoration(
@@ -911,21 +1091,28 @@ class _CompactDropdown extends StatelessWidget {
     required this.hint,
     required this.items,
     required this.onChanged,
+    this.hasError = false,
   });
 
   final String? value;
   final String hint;
   final List<String> items;
   final ValueChanged<String?> onChanged;
+  final bool hasError;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        border: Border.all(color: const Color(0xFFE8EAED)),
+        border: Border.all(
+          color: hasError
+              ? const Color(0xFFD93025)
+              : const Color(0xFFE8EAED),
+          width: hasError ? 1.5 : 1.0,
+        ),
         borderRadius: BorderRadius.circular(8),
-        color: Colors.white,
+        color: hasError ? const Color(0xFFFCE8E6) : Colors.white,
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
