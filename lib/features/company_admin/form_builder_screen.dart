@@ -60,7 +60,9 @@ class _CanvasField {
   List<String> options;
 
   bool get hasOptions =>
-      type.label == 'Dropdown' || type.label == 'Radio Button';
+      type.label == 'Dropdown' ||
+      type.label == 'Radio Button' ||
+      type.label == 'Checkbox';
 }
 
 // ─────────────────────────────────────────────

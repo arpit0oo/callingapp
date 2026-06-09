@@ -648,6 +648,86 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                       }).toList(),
                     ),
                   );
+                } else if (typeLower == 'checkbox') {
+                  // Parse currently selected values from the comma-separated string.
+                  final rawVal = _formData[id]?.toString() ?? '';
+                  final selected = rawVal.isEmpty
+                      ? <String>{}
+                      : rawVal.split(',').map((s) => s.trim()).toSet();
+
+                  fieldWidget = Container(
+                    padding: hasError
+                        ? const EdgeInsets.all(6)
+                        : EdgeInsets.zero,
+                    decoration: hasError
+                        ? BoxDecoration(
+                            border: Border.all(
+                                color: const Color(0xFFD93025), width: 1.5),
+                            borderRadius: BorderRadius.circular(8),
+                          )
+                        : null,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: options.map((opt) {
+                        final checked = selected.contains(opt);
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () => setState(() {
+                            final next = Set<String>.from(selected);
+                            if (checked) {
+                              next.remove(opt);
+                            } else {
+                              next.add(opt);
+                            }
+                            _formData[id] = next.join(', ');
+                            if (next.isNotEmpty) {
+                              _invalidFieldIds.remove(id);
+                            }
+                          }),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 36,
+                                  height: 36,
+                                  child: Checkbox(
+                                    value: checked,
+                                    activeColor: const Color(0xFF1A73E8),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                    onChanged: (_) => setState(() {
+                                      final next = Set<String>.from(selected);
+                                      if (checked) {
+                                        next.remove(opt);
+                                      } else {
+                                        next.add(opt);
+                                      }
+                                      _formData[id] = next.join(', ');
+                                      if (next.isNotEmpty) {
+                                        _invalidFieldIds.remove(id);
+                                      }
+                                    }),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    opt,
+                                    style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      color: const Color(0xFF202124),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
                 } else {
                   final ctrl = _formControllers.putIfAbsent(
                     id, () => TextEditingController(),
