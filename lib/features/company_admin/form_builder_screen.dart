@@ -21,8 +21,7 @@ TextStyle _inter(
   double size, {
   FontWeight weight = FontWeight.w400,
   Color color = _kText,
-}) =>
-    GoogleFonts.inter(fontSize: size, fontWeight: weight, color: color);
+}) => GoogleFonts.inter(fontSize: size, fontWeight: weight, color: color);
 
 // ─────────────────────────────────────────────
 //  Field type model
@@ -51,8 +50,8 @@ class _CanvasField {
     required this.label,
     this.required = false,
     List<String>? options,
-  })  : id = UniqueKey(),
-        options = options ?? [];
+  }) : id = UniqueKey(),
+       options = options ?? [];
 
   final Key id;
   final _FieldType type;
@@ -80,101 +79,87 @@ class FormBuilderContent extends StatefulWidget {
 }
 
 class _FormBuilderContentState extends State<FormBuilderContent> {
-  // Pre-populated dummy fields shown before Firestore loads
-  List<_CanvasField> _fields = [
+  // Pre-populated dummy fields
+  final List<_CanvasField> _fields = [
+    _CanvasField(type: _kFieldTypes[0], label: 'Full Name', required: true),
     _CanvasField(
-        type: _kFieldTypes[0], label: 'Full Name', required: true),
+      type: _kFieldTypes[1],
+      label: 'Monthly Income',
+      required: false,
+    ),
     _CanvasField(
-        type: _kFieldTypes[1], label: 'Monthly Income', required: false),
+      type: _kFieldTypes[2],
+      label: 'City',
+      required: true,
+      options: ['Lucknow', 'Delhi', 'Mumbai'],
+    ),
     _CanvasField(
-        type: _kFieldTypes[2],
-        label: 'City',
-        required: true,
-        options: ['Lucknow', 'Delhi', 'Mumbai']),
-    _CanvasField(
-        type: _kFieldTypes[3],
-        label: 'Interest Level',
-        required: true,
-        options: ['High', 'Medium', 'Low']),
+      type: _kFieldTypes[3],
+      label: 'Interest Level',
+      required: true,
+      options: ['High', 'Medium', 'Low'],
+    ),
   ];
 
-  @override
-  void initState() {
-    super.initState();
-    _loadFormSchema();
-  }
+  bool _saving = false;
 
-  // ── Map Firestore type label → _FieldType ──
-  _FieldType _typeFromLabel(String label) {
-    return _kFieldTypes.firstWhere(
-      (t) => t.label == label,
-      orElse: () => _kFieldTypes[0],
-    );
-  }
+  // Maps the human-readable field type label to a normalized Firestore value.
+  static const _typeMap = <String, String>{
+    'Text Input': 'text',
+    'Number': 'number',
+    'Dropdown': 'dropdown',
+    'Radio Button': 'radio',
+    'Checkbox': 'checkbox',
+    'Date Picker': 'date',
+  };
 
-  Future<void> _loadFormSchema() async {
-    final snap = await FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(AppSession.tenantId)
-        .collection('campaigns')
-        .doc(widget.campaignId)
-        .collection('form_schema')
-        .orderBy('order')
-        .get();
+  Future<void> _saveForm() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final db = FirebaseFirestore.instance;
+      final colRef = db
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('campaigns')
+          .doc(widget.campaignId)
+          .collection('form_schema');
 
-    if (snap.docs.isEmpty) return;
+      final batch = db.batch();
 
-    final loaded = snap.docs.map((doc) {
-      final d = doc.data();
-      final opts = (d['options'] as List<dynamic>? ?? [])
-          .map((e) => e.toString())
-          .toList();
-      return _CanvasField(
-        type: _typeFromLabel(d['type'] as String? ?? 'Text Input'),
-        label: d['label'] as String? ?? doc.id,
-        required: d['required'] as bool? ?? false,
-        options: opts,
-      );
-    }).toList();
+      // Clear existing schema docs.
+      final existing = await colRef.get();
+      for (final doc in existing.docs) {
+        batch.delete(doc.reference);
+      }
 
-    setState(() => _fields = loaded);
-  }
+      // Write one doc per canvas field, keyed by index.
+      for (int i = 0; i < _fields.length; i++) {
+        final f = _fields[i];
+        batch.set(colRef.doc(i.toString()), {
+          'label': f.label,
+          'type': _typeMap[f.type.label] ?? f.type.label.toLowerCase(),
+          'options': f.options,
+          'required': f.required,
+          'order': i,
+        });
+      }
 
-  Future<void> _saveFormSchema() async {
-    final db = FirebaseFirestore.instance;
-    final schemaCol = db
-        .collection('tenants')
-        .doc(AppSession.tenantId)
-        .collection('campaigns')
-        .doc(widget.campaignId)
-        .collection('form_schema');
+      await batch.commit();
 
-    // Delete all existing docs
-    final existing = await schemaCol.get();
-    final deleteBatch = db.batch();
-    for (final doc in existing.docs) {
-      deleteBatch.delete(doc.reference);
-    }
-    await deleteBatch.commit();
-
-    // Write each field
-    final writeBatch = db.batch();
-    for (int i = 0; i < _fields.length; i++) {
-      final f = _fields[i];
-      writeBatch.set(schemaCol.doc('field_$i'), {
-        'label':    f.label,
-        'type':     f.type.label,
-        'required': f.required,
-        'order':    i,
-        'options':  f.options,
-      });
-    }
-    await writeBatch.commit();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Form saved.')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Form saved')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving form: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -226,12 +211,13 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
         Expanded(
           child: _FormCanvas(
             fields: _fields,
+            saving: _saving,
+            onSave: _saveForm,
             onRemove: _removeField,
             onToggleRequired: _toggleRequired,
             onLabelChanged: _updateLabel,
             onOptionsChanged: _updateOptions,
             onReorder: _reorder,
-            onSave: _saveFormSchema,
           ),
         ),
       ],
@@ -259,8 +245,10 @@ class _FieldPicker extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-            child: Text('Add Fields',
-                style: _inter(16, weight: FontWeight.w600)),
+            child: Text(
+              'Add Fields',
+              style: _inter(16, weight: FontWeight.w600),
+            ),
           ),
           const Divider(color: _kBorder, height: 1),
           Expanded(
@@ -269,8 +257,7 @@ class _FieldPicker extends StatelessWidget {
               child: GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
                   crossAxisSpacing: 10,
                   mainAxisSpacing: 10,
@@ -284,7 +271,7 @@ class _FieldPicker extends StatelessWidget {
               ),
             ),
           ),
-          // ── Info footer ───────────────────────
+          // ── Info footer ─
           Container(
             padding: const EdgeInsets.all(16),
             decoration: const BoxDecoration(
@@ -354,9 +341,11 @@ class _FieldTypeCardState extends State<_FieldTypeCard> {
               Text(
                 widget.type.label,
                 textAlign: TextAlign.center,
-                style: _inter(11,
-                    weight: FontWeight.w500,
-                    color: _hovered ? _kBlue : _kText),
+                style: _inter(
+                  11,
+                  weight: FontWeight.w500,
+                  color: _hovered ? _kBlue : _kText,
+                ),
               ),
             ],
           ),
@@ -372,21 +361,23 @@ class _FieldTypeCardState extends State<_FieldTypeCard> {
 class _FormCanvas extends StatelessWidget {
   const _FormCanvas({
     required this.fields,
+    required this.saving,
+    required this.onSave,
     required this.onRemove,
     required this.onToggleRequired,
     required this.onLabelChanged,
     required this.onOptionsChanged,
     required this.onReorder,
-    required this.onSave,
   });
 
   final List<_CanvasField> fields;
+  final bool saving;
+  final VoidCallback onSave;
   final ValueChanged<Key> onRemove;
   final ValueChanged<Key> onToggleRequired;
   final void Function(Key id, String label) onLabelChanged;
   final void Function(Key id, List<String> opts) onOptionsChanged;
   final void Function(int oldIndex, int newIndex) onReorder;
-  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -403,39 +394,48 @@ class _FormCanvas extends StatelessWidget {
           ),
           child: Row(
             children: [
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.arrow_back, size: 20, color: _kTextLight),
-                style: IconButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: const BorderSide(color: _kBorder),
-                  ),
-                  padding: const EdgeInsets.all(8),
-                ),
+              const Icon(
+                Icons.dynamic_form_outlined,
+                size: 20,
+                color: _kTextLight,
               ),
-              const SizedBox(width: 14),
-              const Icon(Icons.dynamic_form_outlined,
-                  size: 20, color: _kTextLight),
               const SizedBox(width: 10),
-              Text('Form Preview',
-                  style: _inter(16, weight: FontWeight.w600)),
+              Text('Form Preview', style: _inter(16, weight: FontWeight.w600)),
               const Spacer(),
               FilledButton.icon(
                 style: FilledButton.styleFrom(
-                  backgroundColor: _kBlue,
+                  backgroundColor: saving ? _kGrey : _kBlue,
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 12),
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
-                onPressed: onSave,
-                icon: const Icon(Icons.save_outlined,
-                    size: 16, color: Colors.white),
-                label: Text('Save Form',
-                    style: _inter(13,
-                        weight: FontWeight.w600, color: Colors.white)),
+                onPressed: saving ? null : onSave,
+                icon: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.save_outlined,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                label: Text(
+                  saving ? 'Saving…' : 'Save Form',
+                  style: _inter(
+                    13,
+                    weight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
               ),
             ],
           ),
@@ -469,17 +469,21 @@ class _EmptyCanvas extends StatelessWidget {
         padding: const EdgeInsets.all(40),
         decoration: BoxDecoration(
           border: Border.all(
-              color: _kBorder.withOpacity(0.8),
-              width: 2,
-              style: BorderStyle.solid),
+            color: _kBorder.withOpacity(0.8),
+            width: 2,
+            style: BorderStyle.solid,
+          ),
           borderRadius: BorderRadius.circular(12),
           color: Colors.white,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.add_to_photos_outlined,
-                size: 40, color: _kGrey.withOpacity(0.5)),
+            Icon(
+              Icons.add_to_photos_outlined,
+              size: 40,
+              color: _kGrey.withOpacity(0.5),
+            ),
             const SizedBox(height: 16),
             Text(
               'Drag fields here to build your form',
@@ -594,7 +598,8 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
   void _startEditing() {
     setState(() => _editingLabel = true);
     WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _labelFocus.requestFocus());
+      (_) => _labelFocus.requestFocus(),
+    );
   }
 
   @override
@@ -615,7 +620,10 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
             ),
             boxShadow: const [
               BoxShadow(
-                  color: _kCardShadow, blurRadius: 4, offset: Offset(0, 2)),
+                color: _kCardShadow,
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
             ],
           ),
           child: Column(
@@ -631,9 +639,11 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
                       cursor: SystemMouseCursors.grab,
                       child: Padding(
                         padding: const EdgeInsets.only(right: 12),
-                        child: Icon(Icons.drag_indicator,
-                            size: 20,
-                            color: _hovered ? _kGrey : _kBorder),
+                        child: Icon(
+                          Icons.drag_indicator,
+                          size: 20,
+                          color: _hovered ? _kGrey : _kBorder,
+                        ),
                       ),
                     ),
                   ),
@@ -645,8 +655,11 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
                       color: _kBlue.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Icon(widget.field.type.icon,
-                        size: 16, color: _kBlue),
+                    child: Icon(
+                      widget.field.type.icon,
+                      size: 16,
+                      color: _kBlue,
+                    ),
                   ),
                   const SizedBox(width: 12),
 
@@ -660,11 +673,15 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
                             decoration: const InputDecoration(
                               isDense: true,
                               contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 6),
+                                horizontal: 8,
+                                vertical: 6,
+                              ),
                               border: OutlineInputBorder(),
                               focusedBorder: OutlineInputBorder(
-                                borderSide:
-                                    BorderSide(color: _kBlue, width: 1.5),
+                                borderSide: BorderSide(
+                                  color: _kBlue,
+                                  width: 1.5,
+                                ),
                               ),
                             ),
                             onSubmitted: (v) {
@@ -676,15 +693,18 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
                             onTap: _startEditing,
                             child: Row(
                               children: [
-                                Text(widget.field.label,
-                                    style: _inter(14,
-                                        weight: FontWeight.w500)),
+                                Text(
+                                  widget.field.label,
+                                  style: _inter(14, weight: FontWeight.w500),
+                                ),
                                 const SizedBox(width: 6),
-                                Icon(Icons.edit_outlined,
-                                    size: 13,
-                                    color: _hovered
-                                        ? _kTextLight
-                                        : Colors.transparent),
+                                Icon(
+                                  Icons.edit_outlined,
+                                  size: 13,
+                                  color: _hovered
+                                      ? _kTextLight
+                                      : Colors.transparent,
+                                ),
                               ],
                             ),
                           ),
@@ -696,8 +716,7 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('Required',
-                          style: _inter(11, color: _kTextLight)),
+                      Text('Required', style: _inter(11, color: _kTextLight)),
                       const SizedBox(width: 6),
                       Transform.scale(
                         scale: 0.78,
@@ -720,32 +739,33 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
               ),
 
               // ── Options toggle (Dropdown / Radio only) ──
-              if (widget.field.hasOptions) ...
-                [
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.click,
-                      child: GestureDetector(
-                        onTap: () => setState(
-                            () => _optionsExpanded = !_optionsExpanded),
-                        child: Text(
-                          'Options (${widget.field.options.length})'
-                          ' ${_optionsExpanded ? '▴' : '▾'}',
-                          style: _inter(11,
-                              color: _kGrey,
-                              weight: FontWeight.w500),
+              if (widget.field.hasOptions) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: () =>
+                          setState(() => _optionsExpanded = !_optionsExpanded),
+                      child: Text(
+                        'Options (${widget.field.options.length})'
+                        ' ${_optionsExpanded ? '▴' : '▾'}',
+                        style: _inter(
+                          11,
+                          color: _kGrey,
+                          weight: FontWeight.w500,
                         ),
                       ),
                     ),
                   ),
-                  if (_optionsExpanded)
-                    _OptionsSection(
-                      options: widget.field.options,
-                      onChanged: widget.onOptionsChanged,
-                    ),
-                ],
+                ),
+                if (_optionsExpanded)
+                  _OptionsSection(
+                    options: widget.field.options,
+                    onChanged: widget.onOptionsChanged,
+                  ),
+              ],
             ],
           ),
         ),
@@ -780,8 +800,7 @@ class _DeleteBtnState extends State<_DeleteBtn> {
             duration: const Duration(milliseconds: 140),
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color:
-                  _hovered ? _kRed.withOpacity(0.10) : Colors.transparent,
+              color: _hovered ? _kRed.withOpacity(0.10) : Colors.transparent,
               borderRadius: BorderRadius.circular(6),
             ),
             child: Icon(
@@ -800,10 +819,7 @@ class _DeleteBtnState extends State<_DeleteBtn> {
 //  Options Section (Dropdown / Radio)
 // ─────────────────────────────────────────────
 class _OptionsSection extends StatefulWidget {
-  const _OptionsSection({
-    required this.options,
-    required this.onChanged,
-  });
+  const _OptionsSection({required this.options, required this.onChanged});
 
   final List<String> options;
   final ValueChanged<List<String>> onChanged;
@@ -877,7 +893,9 @@ class _OptionsSectionState extends State<_OptionsSection> {
                     decoration: InputDecoration(
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 8),
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
                       hintText: 'New option…',
                       hintStyle: _inter(12, color: _kGrey),
                       border: OutlineInputBorder(
@@ -890,8 +908,7 @@ class _OptionsSectionState extends State<_OptionsSection> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
-                        borderSide:
-                            const BorderSide(color: _kBlue, width: 1.5),
+                        borderSide: const BorderSide(color: _kBlue, width: 1.5),
                       ),
                     ),
                     onSubmitted: (_) => _addOption(),
@@ -908,11 +925,15 @@ class _OptionsSectionState extends State<_OptionsSection> {
                     side: const BorderSide(color: _kBlue),
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6)),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: Text('Add', style: _inter(12, color: _kBlue, weight: FontWeight.w600)),
+                  child: Text(
+                    'Add',
+                    style: _inter(12, color: _kBlue, weight: FontWeight.w600),
+                  ),
                 ),
               ),
             ],

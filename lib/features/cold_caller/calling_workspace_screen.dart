@@ -243,7 +243,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
         children: [
           IconButton(
             icon: const Icon(Icons.arrow_back, size: 22, color: Color(0xFF202124)),
-            onPressed: () {},
+            onPressed: () => CallerShell.shellKey.currentState?.navigateTo(0),
           ),
           Expanded(
             child: Text(
@@ -440,26 +440,28 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
 
                 Widget fieldWidget;
 
-                if (type == 'text' || type == 'number') {
+                final typeLower = type.toLowerCase();
+
+                if (typeLower == 'text' || typeLower == 'text input' || typeLower == 'number') {
                   final ctrl = _formControllers.putIfAbsent(
                     id, () => TextEditingController(),
                   );
                   fieldWidget = _CompactTextField(
                     controller: ctrl,
                     hint: 'Enter $label',
-                    keyboardType: type == 'number'
+                    keyboardType: typeLower == 'number'
                         ? TextInputType.number
                         : TextInputType.text,
                     onChanged: (v) => _formData[id] = v,
                   );
-                } else if (type == 'dropdown') {
+                } else if (typeLower == 'dropdown') {
                   fieldWidget = _CompactDropdown(
                     value: _formData[id]?.toString(),
                     hint: 'Select $label',
                     items: options,
                     onChanged: (v) => setState(() => _formData[id] = v),
                   );
-                } else if (type == 'radio' || type == 'chips') {
+                } else if (typeLower == 'radio' || typeLower == 'radio button' || typeLower == 'chips') {
                   fieldWidget = Wrap(
                     spacing: 6,
                     runSpacing: 6,
