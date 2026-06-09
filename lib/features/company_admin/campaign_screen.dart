@@ -36,50 +36,7 @@ BoxDecoration _card({double radius = 8}) => BoxDecoration(
       ],
     );
 
-// ─────────────────────────────────────────────
-//  Dummy fallback data (shown when Firestore has 0 docs)
-// ─────────────────────────────────────────────
-class _Campaign {
-  const _Campaign({
-    required this.name,
-    required this.status,
-    required this.manager,
-    required this.rawLeads,
-    required this.createdDate,
-  });
-  final String name;
-  final String status;
-  final String manager;
-  final String rawLeads;
-  final String createdDate;
-}
 
-const _kDummyCampaigns = [
-  _Campaign(
-    name: 'Xpert Tutor',
-    status: 'active',
-    manager: 'Amit',
-    rawLeads: '12,500',
-    createdDate: 'Jan 12, 2025',
-  ),
-  _Campaign(
-    name: 'Solar Campaign',
-    status: 'active',
-    manager: 'Rahul',
-    rawLeads: '5,600',
-    createdDate: 'Feb 3, 2025',
-  ),
-  _Campaign(
-    name: 'DSA Campaign',
-    status: 'paused',
-    manager: 'Neha',
-    rawLeads: '18,200',
-    createdDate: 'Mar 1, 2025',
-  ),
-];
-
-const _kManagers = ['Amit', 'Rahul', 'Neha'];
-const _kStatuses = ['active', 'paused'];
 const _kFilterTabs = ['All', 'active', 'paused'];
 
 // ─────────────────────────────────────────────
@@ -173,11 +130,6 @@ class _CampaignContentState extends State<CampaignContent> {
       child: StreamBuilder<QuerySnapshot>(
         stream: CampaignService.getCampaigns(AppSession.tenantId),
         builder: (context, snap) {
-          // Resolve docs or fallback dummy data
-          final bool isFirestore =
-              snap.hasData && snap.data!.docs.isNotEmpty;
-          final bool useDummy =
-              !snap.hasData || snap.data!.docs.isEmpty;
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(28),
@@ -329,15 +281,11 @@ class _CampaignContentState extends State<CampaignContent> {
                           ),
                         )
 
-                      // ── Firestore rows or dummy fallback
-                      else if (isFirestore)
-                        _FirestoreTable(
-                          docs: _applyFilter(snap.data!.docs),
-                        )
+                      // ── Firestore rows
                       else
-                        _DummyTable(
-                          campaigns: _applyDummyFilter(_kDummyCampaigns),
-                        ),
+                        _FirestoreTable(
+                          docs: snap.hasData ? _applyFilter(snap.data!.docs) : [],
+                        )
                     ],
                   ),
                 ),
@@ -363,15 +311,7 @@ class _CampaignContentState extends State<CampaignContent> {
     }).toList();
   }
 
-  List<_Campaign> _applyDummyFilter(List<_Campaign> list) {
-    final tab = _kFilterTabs[_activeFilter];
-    return list.where((c) {
-      final matchFilter = tab == 'All' || c.status == tab;
-      final matchSearch = _searchQuery.isEmpty ||
-          c.name.toLowerCase().contains(_searchQuery.toLowerCase());
-      return matchFilter && matchSearch;
-    }).toList();
-  }
+
 }
 
 // ─────────────────────────────────────────────
@@ -394,7 +334,7 @@ class _FirestoreTable extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 48),
         child: Center(
-            child: Text('No campaigns found.',
+            child: Text('No campaigns yet.',
                 style: _inter(14, color: _kGrey))),
       );
     }
@@ -516,105 +456,7 @@ class _FirestoreActionButtons extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-//  Dummy Table (fallback when Firestore is empty)
-// ─────────────────────────────────────────────
-class _DummyTable extends StatelessWidget {
-  const _DummyTable({required this.campaigns});
-  final List<_Campaign> campaigns;
 
-  static const _columns = [
-    'Campaign Name',
-    'Status',
-    'Assigned Manager',
-    'Raw Leads',
-    'Created Date',
-    'Actions',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    if (campaigns.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 48),
-        child: Center(
-            child: Text('No campaigns found.',
-                style: _inter(14, color: _kGrey))),
-      );
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minWidth: constraints.maxWidth),
-            child: DataTable(
-              headingRowHeight: 44,
-              dataRowMinHeight: 56,
-              dataRowMaxHeight: 56,
-              columnSpacing: 24,
-              headingTextStyle:
-                  _inter(12, weight: FontWeight.w600, color: _kTextLight),
-              dataTextStyle: _inter(13),
-              columns:
-                  _columns.map((c) => DataColumn(label: Text(c))).toList(),
-              rows: campaigns.map((c) => _buildRow(c)).toList(),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  DataRow _buildRow(_Campaign c) {
-    final isActive = c.status == 'active';
-    return DataRow(cells: [
-      DataCell(Text(c.name, style: _inter(13, weight: FontWeight.w500))),
-      DataCell(StatusBadge(
-        label: isActive ? 'Active' : 'Paused',
-        color: isActive ? _kGreen : _kGrey,
-      )),
-      DataCell(Row(children: [
-        CircleAvatar(
-          radius: 13,
-          backgroundColor: _kBlue.withOpacity(0.12),
-          child: Text(c.manager[0],
-              style: _inter(11, weight: FontWeight.w600, color: _kBlue)),
-        ),
-        const SizedBox(width: 8),
-        Text(c.manager),
-      ])),
-      DataCell(Text(c.rawLeads)),
-      DataCell(Text(c.createdDate, style: _inter(13, color: _kTextLight))),
-      // Dummy action buttons (no-op)
-      DataCell(Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _IconBtn(
-              icon: Icons.edit_outlined,
-              tooltip: 'Edit',
-              color: _kBlue,
-              onTap: () {}),
-          const SizedBox(width: 4),
-          _IconBtn(
-              icon: Icons.settings_outlined,
-              tooltip: 'Settings',
-              color: _kTextLight,
-              onTap: () {}),
-          const SizedBox(width: 4),
-          _IconBtn(
-            icon: isActive
-                ? Icons.pause_circle_outline
-                : Icons.play_circle_outline,
-            tooltip: isActive ? 'Pause' : 'Resume',
-            color: isActive ? const Color(0xFFFA7B17) : _kGreen,
-            onTap: () {},
-          ),
-        ],
-      )),
-    ]);
-  }
-}
 
 // ─────────────────────────────────────────────
 //  Shared icon button

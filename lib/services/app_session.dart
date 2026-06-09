@@ -1,6 +1,7 @@
 class AppSession {
   static String tenantId = "xperttutor";
   static String userId = "test_user";
+  static String name = "";
   static String role = AppRoles.companyAdmin;
   static String campaignId = "";
 }

@@ -120,6 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
       // 3. Hydrate AppSession
       AppSession.tenantId = tenantId;
       AppSession.userId   = user.uid;
+      AppSession.name     = data['name'] ?? '';
       AppSession.role     = (data['role'] as String? ?? '').toLowerCase();
 
       final assignedCampaigns =
@@ -137,11 +138,11 @@ class _LoginScreenState extends State<LoginScreen> {
         case AppRoles.manager:
           _goTo(ManagerShell(key: ManagerShell.shellKey));
           break;
-        case AppRoles.coldCaller:
-          _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold'));
+        case 'cold_caller':
+          _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold_caller'));
           break;
-        case AppRoles.warmCaller:
-          _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm'));
+        case 'warm_caller':
+          _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm_caller'));
           break;
         case AppRoles.superAdmin:
           _goTo(SuperAdminShell(key: SuperAdminShell.shellKey));

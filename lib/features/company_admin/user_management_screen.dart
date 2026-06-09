@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:callingapp/services/app_session.dart';
@@ -36,6 +37,14 @@ BoxDecoration _card({double radius = 8}) => BoxDecoration(
 String _capitalize(String s) =>
     s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1).toLowerCase()}';
 
+String _displayRole(String role) {
+  final r = role.toLowerCase().trim();
+  if (r == 'manager') return 'Manager';
+  if (r == 'cold_caller' || r == 'cold') return 'Cold Caller';
+  if (r == 'warm_caller' || r == 'warm') return 'Warm Caller';
+  return 'Cold Caller'; // fallback to avoid crash
+}
+
 // ─────────────────────────────────────────────
 //  Data models
 // ─────────────────────────────────────────────
@@ -54,17 +63,8 @@ class _User {
   final String docId;
 }
 
-const _kUsers = [
-  _User(name: 'Amit Sharma',  email: 'amit@callingapp.in',   role: 'Manager', campaign: 'Xpert Tutor',     status: 'Active',   lastActive: '2h ago',  phone: '+91 98001 11111'),
-  _User(name: 'Rahul Verma',  email: 'rahul@callingapp.in',  role: 'Manager', campaign: 'Solar Campaign',  status: 'Active',   lastActive: '1d ago',  phone: '+91 98001 22222'),
-  _User(name: 'Neha Singh',   email: 'neha@callingapp.in',   role: 'Manager', campaign: 'DSA Campaign',    status: 'Active',   lastActive: '3h ago',  phone: '+91 98001 33333'),
-  _User(name: 'Ravi Kumar',   email: 'ravi@callingapp.in',   role: 'Caller',  campaign: 'Xpert Tutor',     status: 'Active',   lastActive: '30m ago', phone: '+91 98001 44444'),
-  _User(name: 'Priya Patel',  email: 'priya@callingapp.in',  role: 'Caller',  campaign: 'Solar Campaign',  status: 'Inactive', lastActive: '5d ago',  phone: '+91 98001 55555'),
-  _User(name: 'Suresh Yadav', email: 'suresh@callingapp.in', role: 'Caller',  campaign: 'Xpert Tutor',     status: 'Active',   lastActive: '1h ago',  phone: '+91 98001 66666'),
-];
-
 const _kCampaignsFallback = ['Xpert Tutor', 'Solar Campaign', 'DSA Campaign'];
-const _kRoles = ['Manager', 'Caller'];
+const _kRoles = ['Manager', 'Cold Caller', 'Warm Caller'];
 const _kStatuses = ['Active', 'Inactive'];
 const _kFilterTabs = ['All', 'Managers', 'Callers'];
 
@@ -87,51 +87,47 @@ class _UserManagementContentState extends State<UserManagementContent> {
   String _editingDocId = '';
 
   // Form controllers
-  final _nameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  String _selectedRole = _kRoles.first;
+  final _nameCtrl     = TextEditingController();
+  final _emailCtrl    = TextEditingController();
+  final _phoneCtrl    = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  bool _obscurePassword = true;
+  String _selectedRole     = _kRoles.first;
   String _selectedCampaign = _kCampaignsFallback.first;
-  String _selectedStatus = _kStatuses.first;
+  String _selectedStatus   = _kStatuses.first;
 
   @override
   void dispose() {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
   }
 
-  List<_User> get _filtered {
-    final tab = _kFilterTabs[_filterIndex];
-    return _kUsers.where((u) {
-      final matchTab = tab == 'All' ||
-          (tab == 'Managers' && u.role == 'Manager') ||
-          (tab == 'Callers' && u.role == 'Caller');
-      final matchSearch = _search.isEmpty ||
-          u.name.toLowerCase().contains(_search.toLowerCase());
-      return matchTab && matchSearch;
-    }).toList();
-  }
+
 
   void _openCreate() {
     _nameCtrl.clear();
     _emailCtrl.clear();
     _phoneCtrl.clear();
-    _selectedRole = _kRoles.first;
+    _passwordCtrl.clear();
+    _obscurePassword = true;
+    _selectedRole     = _kRoles.first;
     _selectedCampaign = _kCampaignsFallback.first;
-    _selectedStatus = _kStatuses.first;
+    _selectedStatus   = _kStatuses.first;
     setState(() { _isEditMode = false; _editingUser = null; _editingDocId = ''; _panelOpen = true; });
   }
 
   void _openEdit(_User u) {
-    _nameCtrl.text = u.name;
+    _nameCtrl.text  = u.name;
     _emailCtrl.text = u.email;
     // Strip non-digits so the digits-only phone field accepts it
     _phoneCtrl.text = u.phone.replaceAll(RegExp(r'\D'), '');
-    _selectedRole = u.role;
+    _passwordCtrl.clear(); // password not shown / edited in edit mode
+    _selectedRole     = u.role;
     _selectedCampaign = u.campaign == '\u2014' ? _kCampaignsFallback.first : u.campaign;
-    _selectedStatus = u.status;
+    _selectedStatus   = u.status;
     setState(() { _isEditMode = true; _editingUser = u; _editingDocId = u.docId; _panelOpen = true; });
   }
 
@@ -172,13 +168,50 @@ class _UserManagementContentState extends State<UserManagementContent> {
                 const SizedBox(height: 24),
 
                 // ── Stats Row ─────────────────────────
-                Row(children: [
-                  _StatCard(label: 'Total Users', value: '12', icon: Icons.people_outline),
-                  const SizedBox(width: 16),
-                  _StatCard(label: 'Active Managers', value: '4', icon: Icons.manage_accounts_outlined),
-                  const SizedBox(width: 16),
-                  _StatCard(label: 'Active Callers', value: '8', icon: Icons.headset_mic_outlined),
-                ]),
+                StreamBuilder<QuerySnapshot>(
+                  stream: UserService.getUsers(AppSession.tenantId),
+                  builder: (context, snapshot) {
+                    int totalUsers = 0;
+                    int activeManagers = 0;
+                    int activeCallers = 0;
+
+                    if (snapshot.hasData) {
+                      final docs = snapshot.data!.docs;
+                      totalUsers = docs.length;
+                      for (final doc in docs) {
+                        final data = doc.data() as Map<String, dynamic>? ?? {};
+                        final role = (data['role'] as String? ?? '').toLowerCase();
+                        final status = (data['status'] as String? ?? '').toLowerCase();
+
+                        if (role == 'manager' && status == 'active') {
+                          activeManagers++;
+                        } else if ((role == 'cold_caller' || role == 'warm_caller') && status == 'active') {
+                          activeCallers++;
+                        }
+                      }
+                    }
+
+                    return Row(children: [
+                      _StatCard(
+                        label: 'Total Users',
+                        value: totalUsers.toString(),
+                        icon: Icons.people_outline,
+                      ),
+                      const SizedBox(width: 16),
+                      _StatCard(
+                        label: 'Active Managers',
+                        value: activeManagers.toString(),
+                        icon: Icons.manage_accounts_outlined,
+                      ),
+                      const SizedBox(width: 16),
+                      _StatCard(
+                        label: 'Active Callers',
+                        value: activeCallers.toString(),
+                        icon: Icons.headset_mic_outlined,
+                      ),
+                    ]);
+                  },
+                ),
                 const SizedBox(height: 24),
 
                 // ── User Table Card ───────────────────
@@ -236,9 +269,6 @@ class _UserManagementContentState extends State<UserManagementContent> {
                       stream: UserService.getUsers(AppSession.tenantId),
                       builder: (context, snapshot) {
                         final docs = snapshot.hasData ? snapshot.data!.docs : <QueryDocumentSnapshot>[];
-                        if (docs.isEmpty) {
-                          return _UserTable(users: _filtered, onEdit: _openEdit, tenantId: AppSession.tenantId);
-                        }
                         final tab = _kFilterTabs[_filterIndex];
                         final liveDocs = docs.where((doc) {
                           final data = doc.data() as Map<String, dynamic>;
@@ -246,7 +276,7 @@ class _UserManagementContentState extends State<UserManagementContent> {
                           final name = (data['name'] as String? ?? '').toLowerCase();
                           final matchTab = tab == 'All' ||
                               (tab == 'Managers' && role == 'manager') ||
-                              (tab == 'Callers' && role == 'caller');
+                              (tab == 'Callers' && (role == 'cold_caller' || role == 'warm_caller' || role == 'caller' || role == 'cold' || role == 'warm'));
                           final matchSearch = _search.isEmpty ||
                               name.contains(_search.toLowerCase());
                           return matchTab && matchSearch;
@@ -265,7 +295,7 @@ class _UserManagementContentState extends State<UserManagementContent> {
                             docId: doc.id,
                             name: data['name'] as String? ?? '\u2014',
                             email: data['email'] as String? ?? '\u2014',
-                            role: _capitalize(data['role'] as String? ?? 'caller'),
+                            role: _displayRole(data['role'] as String? ?? 'cold_caller'),
                             campaign: campaign,
                             status: _capitalize(data['status'] as String? ?? 'inactive'),
                             lastActive: lastActive,
@@ -300,6 +330,10 @@ class _UserManagementContentState extends State<UserManagementContent> {
               nameCtrl: _nameCtrl,
               emailCtrl: _emailCtrl,
               phoneCtrl: _phoneCtrl,
+              passwordCtrl: _passwordCtrl,
+              obscurePassword: _obscurePassword,
+              onObscureToggle: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
               selectedRole: _selectedRole,
               selectedCampaign: _selectedCampaign,
               selectedStatus: _selectedStatus,
@@ -309,17 +343,6 @@ class _UserManagementContentState extends State<UserManagementContent> {
               onClose: _closePanel,
               onCancel: _closePanel,
               onSave: () async {
-                // Validate name
-                if (_nameCtrl.text.trim().isEmpty) return;
-
-                // Validate email format
-                final emailRegex = RegExp(r'^[\w\.\-]+@[\w\-]+\.\w{2,}$');
-                if (!emailRegex.hasMatch(_emailCtrl.text.trim())) return;
-
-                // Validate phone — exactly 10 digits
-                final phoneDigits = _phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '');
-                if (phoneDigits.length != 10) return;
-
                 final payload = {
                   'name': _nameCtrl.text.trim(),
                   'email': _emailCtrl.text.trim(),
@@ -330,24 +353,54 @@ class _UserManagementContentState extends State<UserManagementContent> {
                 };
 
                 if (_isEditMode && _editingDocId.isNotEmpty) {
+                  // Edit path — no Auth changes, just update Firestore.
                   await UserService.updateUser(
                     AppSession.tenantId,
                     _editingDocId,
                     payload,
                   );
                 } else {
-                  final tempUserId =
-                      DateTime.now().millisecondsSinceEpoch.toString();
+                  // Create path — create Firebase Auth account first.
+                  String newUid;
+                  try {
+                    final credential = await FirebaseAuth.instance
+                        .createUserWithEmailAndPassword(
+                      email: _emailCtrl.text.trim(),
+                      password: _passwordCtrl.text,
+                    );
+                    newUid = credential.user!.uid;
+                  } on FirebaseAuthException catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            e.message ?? 'Failed to create Auth account.',
+                            style: _inter(13, color: Colors.white),
+                          ),
+                          backgroundColor: _kRed,
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      );
+                    }
+                    return; // Do not write to Firestore on Auth failure.
+                  }
+
+                  // Auth succeeded — write Firestore document with the real UID.
                   await UserService.createUser(
                     AppSession.tenantId,
-                    tempUserId,
-                    {'createdAt': FieldValue.serverTimestamp(), 'tenantId': AppSession.tenantId, ...payload},
+                    newUid,
+                    {
+                      'createdAt': FieldValue.serverTimestamp(),
+                      'tenantId': AppSession.tenantId,
+                      ...payload,
+                    },
                   );
-                  // createUser hardcodes assignedCampaigns:[] and status:'active';
-                  // immediately patch with the user's actual selections.
+                  // Patch selections that UserService.createUser may override.
                   await UserService.updateUser(
                     AppSession.tenantId,
-                    tempUserId,
+                    newUid,
                     {
                       'assignedCampaigns': [_selectedCampaign],
                       'status': _selectedStatus.toLowerCase(),
@@ -415,7 +468,7 @@ class _UserTable extends StatelessWidget {
     if (users.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 48),
-        child: Center(child: Text('No users found.', style: _inter(14, color: _kGrey))),
+        child: Center(child: Text('No users yet.', style: _inter(14, color: _kGrey))),
       );
     }
     return LayoutBuilder(builder: (context, constraints) {
@@ -620,6 +673,9 @@ class _UserPanel extends StatefulWidget {
     required this.nameCtrl,
     required this.emailCtrl,
     required this.phoneCtrl,
+    required this.passwordCtrl,
+    required this.obscurePassword,
+    required this.onObscureToggle,
     required this.selectedRole,
     required this.selectedCampaign,
     required this.selectedStatus,
@@ -632,7 +688,9 @@ class _UserPanel extends StatefulWidget {
   });
 
   final bool isEditMode;
-  final TextEditingController nameCtrl, emailCtrl, phoneCtrl;
+  final TextEditingController nameCtrl, emailCtrl, phoneCtrl, passwordCtrl;
+  final bool obscurePassword;
+  final VoidCallback onObscureToggle;
   final String selectedRole, selectedCampaign, selectedStatus;
   final ValueChanged<String?> onRoleChanged, onCampaignChanged, onStatusChanged;
   final VoidCallback onClose, onCancel, onSave;
@@ -645,27 +703,40 @@ class _UserPanelState extends State<_UserPanel> {
   String? _nameError;
   String? _emailError;
   String? _phoneError;
+  String? _passwordError;
 
   static final _emailRegex = RegExp(r'^[\w\.\-]+@[\w\-]+\.\w{2,}$');
 
   /// Returns true if all fields are valid; populates error strings otherwise.
   bool _validate() {
-    final name = widget.nameCtrl.text.trim();
-    final email = widget.emailCtrl.text.trim();
+    final name        = widget.nameCtrl.text.trim();
+    final email       = widget.emailCtrl.text.trim();
+    final password    = widget.passwordCtrl.text;
     final phoneDigits = widget.phoneCtrl.text.trim().replaceAll(RegExp(r'\D'), '');
 
-    String? nameErr = name.isEmpty ? 'Name is required.' : null;
+    String? nameErr  = name.isEmpty ? 'Name is required.' : null;
     String? emailErr = email.isEmpty
         ? 'Email is required.'
         : (!_emailRegex.hasMatch(email) ? 'Enter a valid email address.' : null);
     String? phoneErr = phoneDigits.length != 10 ? 'Enter exactly 10 digits.' : null;
+    // Password is only required when creating a new user.
+    String? passwordErr;
+    if (!widget.isEditMode) {
+      if (password.isEmpty) {
+        passwordErr = 'Password is required.';
+      } else if (password.length < 6) {
+        passwordErr = 'Password must be at least 6 characters.';
+      }
+    }
 
     setState(() {
-      _nameError = nameErr;
-      _emailError = emailErr;
-      _phoneError = phoneErr;
+      _nameError     = nameErr;
+      _emailError    = emailErr;
+      _phoneError    = phoneErr;
+      _passwordError = passwordErr;
     });
-    return nameErr == null && emailErr == null && phoneErr == null;
+    return nameErr == null && emailErr == null &&
+           phoneErr == null && passwordErr == null;
   }
 
   Widget _errorText(String? msg) => msg == null
@@ -748,6 +819,31 @@ class _UserPanelState extends State<_UserPanel> {
               _errorText(_phoneError),
               const SizedBox(height: 14),
 
+              // Password field — only shown when creating a new user.
+              if (!widget.isEditMode) ...[
+                _FieldLabel('Password'),
+                const SizedBox(height: 6),
+                _OutlinedField(
+                  controller: widget.passwordCtrl,
+                  hint: '••••••••',
+                  obscureText: widget.obscurePassword,
+                  hasError: _passwordError != null,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      widget.obscurePassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      size: 18,
+                      color: _kGrey,
+                    ),
+                    onPressed: widget.onObscureToggle,
+                    splashRadius: 20,
+                  ),
+                ),
+                _errorText(_passwordError),
+                const SizedBox(height: 14),
+              ],
+
               _FieldLabel('Role'),
               const SizedBox(height: 6),
               _Dropdown<String>(value: widget.selectedRole, items: _kRoles, onChanged: widget.onRoleChanged),
@@ -829,11 +925,20 @@ class _FieldLabel extends StatelessWidget {
 }
 
 class _OutlinedField extends StatelessWidget {
-  const _OutlinedField({required this.controller, required this.hint, this.type, this.hasError = false});
+  const _OutlinedField({
+    required this.controller,
+    required this.hint,
+    this.type,
+    this.hasError = false,
+    this.obscureText = false,
+    this.suffixIcon,
+  });
   final TextEditingController controller;
   final String hint;
   final TextInputType? type;
   final bool hasError;
+  final bool obscureText;
+  final Widget? suffixIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -841,10 +946,12 @@ class _OutlinedField extends StatelessWidget {
     return TextField(
       controller: controller,
       keyboardType: type,
+      obscureText: obscureText,
       style: _inter(13),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: _inter(13, color: _kGrey),
+        suffixIcon: suffixIcon,
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: borderColor)),
         enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: borderColor)),

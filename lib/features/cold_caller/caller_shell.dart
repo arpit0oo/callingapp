@@ -1,6 +1,9 @@
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../services/app_session.dart';
+import '../../services/rtdb_service.dart';
 import 'home_screen.dart';
 import 'calling_workspace_screen.dart';
 import 'performance_screen.dart';
@@ -26,6 +29,26 @@ class CallerShell extends StatefulWidget {
 
 class CallerShellState extends State<CallerShell> {
   int _selectedIndex = 0;
+  Map<String, dynamic>? _currentLead;
+
+  @override
+  void initState() {
+    super.initState();
+    RtdbService.updateCallerState(AppSession.tenantId, AppSession.userId, {
+      'status': 'idle',
+      'currentLeadId': '',
+      'lastSeen': ServerValue.timestamp,
+    });
+  }
+
+  @override
+  void dispose() {
+    RtdbService.updateCallerState(AppSession.tenantId, AppSession.userId, {
+      'status': 'offline',
+      'lastSeen': ServerValue.timestamp,
+    });
+    super.dispose();
+  }
 
   // ── Colors ────────────────────────────────────────────────────
   static const _selectedColor = Color(0xFF1A73E8);
@@ -33,6 +56,14 @@ class CallerShellState extends State<CallerShell> {
 
   /// Programmatically switch to any tab by index.
   void navigateTo(int index) => setState(() => _selectedIndex = index);
+
+  void setCurrentLead(Map<String, dynamic> lead) {
+    setState(() => _currentLead = lead);
+  }
+
+  void clearCurrentLead() {
+    setState(() => _currentLead = null);
+  }
 
   // ── Nav-bar items ─────────────────────────────────────────────
   static const _navItems = [
@@ -69,9 +100,15 @@ class CallerShellState extends State<CallerShell> {
                   child: IndexedStack(
                     index: _selectedIndex,
                     children: [
-                      CallerHomeContent(role: widget.role),            // index 0
-                      CallingWorkspaceContent(role: widget.role),      // index 1
-                      PerformanceContent(role: widget.role),           // index 2
+                      CallerHomeContent(
+                        role: widget.role,
+                        onLeadAssigned: setCurrentLead,
+                      ),
+                      CallingWorkspaceContent(
+                        role: widget.role,
+                        currentLead: _currentLead,
+                      ),
+                      PerformanceContent(role: widget.role),
                     ],
                   ),
                 ),

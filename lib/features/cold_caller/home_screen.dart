@@ -1,14 +1,31 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../services/app_session.dart';
+import '../../services/lead_service.dart';
+import '../../services/rtdb_service.dart';
+import 'caller_shell.dart';
+
 /// Home screen for Cold Caller (role="cold") and Warm Caller (role="warm").
 /// Designed as a mobile-first layout, max width 420 px.
-class CallerHomeContent extends StatelessWidget {
-  const CallerHomeContent({super.key, required this.role});
+class CallerHomeContent extends StatefulWidget {
+  const CallerHomeContent({
+    super.key,
+    required this.role,
+    required this.onLeadAssigned,
+  });
 
   /// "cold" = raw-lead caller, "warm" = callback caller.
   final String role;
+  final ValueChanged<Map<String, dynamic>> onLeadAssigned;
 
+  @override
+  State<CallerHomeContent> createState() => _CallerHomeContentState();
+}
+
+class _CallerHomeContentState extends State<CallerHomeContent> {
   // ── Colors ────────────────────────────────────────────────────
   static const _primary = Color(0xFF1A73E8);
   static const _primaryDark = Color(0xFF1557B0);
@@ -61,7 +78,7 @@ class CallerHomeContent extends StatelessWidget {
         children: [
           // Greeting
           Text(
-            'Good Morning, Ravi 👋',
+            'Good Morning, ${AppSession.name.isNotEmpty ? AppSession.name : AppSession.userId} 👋',
             style: GoogleFonts.inter(
               fontSize: 20,
               fontWeight: FontWeight.w700,
@@ -72,7 +89,7 @@ class CallerHomeContent extends StatelessWidget {
 
           // Campaign subtitle
           Text(
-            role == 'warm'
+            widget.role == 'warm'
                 ? 'Callbacks — Xpert Tutor'
                 : 'Xpert Tutor Campaign',
             style: GoogleFonts.inter(
@@ -139,35 +156,53 @@ class CallerHomeContent extends StatelessWidget {
   // ── KPI cards ─────────────────────────────────────────────────
 
   Widget _buildKpiSection() {
-    return SizedBox(
-      height: 112,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        children: const [
-          _KpiCard(
-            icon: Icons.call_outlined,
-            iconColor: Color(0xFF1A73E8),
-            value: '45',
-            label: 'Calls Made',
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('leads')
+          .where('assignedTo', isEqualTo: AppSession.userId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        int callsMade = 0;
+        if (snapshot.hasData) {
+          callsMade = snapshot.data!.docs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            return data['status'] == 'disposed';
+          }).length;
+        }
+
+        return SizedBox(
+          height: 112,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            children: [
+              _KpiCard(
+                icon: Icons.call_outlined,
+                iconColor: const Color(0xFF1A73E8),
+                value: callsMade.toString(),
+                label: 'Calls Made',
+              ),
+              const SizedBox(width: 12),
+              const _KpiCard(
+                icon: Icons.person_add_outlined,
+                iconColor: Color(0xFF34A853),
+                value: '0',
+                label: 'Leads Generated',
+              ),
+              const SizedBox(width: 12),
+              const _KpiCard(
+                icon: Icons.event_outlined,
+                iconColor: Color(0xFFFBBC04),
+                value: '0',
+                label: 'Callbacks Scheduled',
+              ),
+              const SizedBox(width: 16),
+            ],
           ),
-          SizedBox(width: 12),
-          _KpiCard(
-            icon: Icons.person_add_outlined,
-            iconColor: Color(0xFF34A853),
-            value: '8',
-            label: 'Leads Generated',
-          ),
-          SizedBox(width: 12),
-          _KpiCard(
-            icon: Icons.event_outlined,
-            iconColor: Color(0xFFFBBC04),
-            value: '3',
-            label: 'Callbacks Scheduled',
-          ),
-          SizedBox(width: 16),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -179,18 +214,42 @@ class CallerHomeContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _GetNextLeadButton(role: role),
+          _GetNextLeadButton(
+            role: widget.role,
+            onLeadAssigned: widget.onLeadAssigned,
+          ),
           const SizedBox(height: 8),
-          Text(
-            role == 'warm'
-                ? '12 callbacks remaining in queue'
-                : '47 leads remaining in queue',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              color: _textHint,
-              fontWeight: FontWeight.w400,
-            ),
+          StreamBuilder<DatabaseEvent>(
+            stream: RtdbService.watchQueueCounts(AppSession.tenantId, AppSession.campaignId),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return Text(
+                  '...',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: _textHint,
+                    fontWeight: FontWeight.w400,
+                  ),
+                );
+              }
+              final data = snapshot.data?.snapshot.value as Map?;
+              final rawPending = data?['rawPending'] ?? 0;
+              final warmPending = data?['warmPending'] ?? 0;
+              final count = widget.role == 'warm' ? warmPending : rawPending;
+              
+              return Text(
+                widget.role == 'warm'
+                    ? '$count callbacks remaining in queue'
+                    : '$count leads remaining in queue',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: _textHint,
+                  fontWeight: FontWeight.w400,
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -200,7 +259,7 @@ class CallerHomeContent extends StatelessWidget {
   // ── Recent calls ──────────────────────────────────────────────
 
   Widget _buildRecentCalls() {
-    final calls = role == 'warm'
+    final calls = widget.role == 'warm'
         ? const [
             _CallLog(time: '09:14', number: '+91 98765 43210', disposition: 'Interested',    chipColor: Color(0xFFE6F4EA), textColor: Color(0xFF137333)),
             _CallLog(time: '09:32', number: '+91 87654 32109', disposition: 'Reschedule',    chipColor: Color(0xFFE8F0FE), textColor: Color(0xFF1A73E8)),
@@ -306,8 +365,12 @@ class _KpiCard extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _GetNextLeadButton extends StatefulWidget {
-  const _GetNextLeadButton({required this.role});
+  const _GetNextLeadButton({
+    required this.role,
+    required this.onLeadAssigned,
+  });
   final String role;
+  final ValueChanged<Map<String, dynamic>> onLeadAssigned;
 
   @override
   State<_GetNextLeadButton> createState() => _GetNextLeadButtonState();
@@ -316,21 +379,60 @@ class _GetNextLeadButton extends StatefulWidget {
 class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
   bool _hovered = false;
   bool _pressed = false;
+  bool _loading = false;
 
   static const _primary = Color(0xFF1A73E8);
   static const _primaryDark = Color(0xFF1557B0);
 
+  Future<void> _handleTap() async {
+    if (_loading) return;
+    setState(() => _loading = true);
+
+    try {
+      final lead = await LeadService.getNextLead(
+        AppSession.tenantId,
+        AppSession.campaignId,
+        AppSession.userId,
+      );
+
+      if (!mounted) return;
+
+      if (lead != null) {
+        final leadId = lead['id']?.toString() ?? '';
+        await RtdbService.updateCallerState(
+          AppSession.tenantId,
+          AppSession.userId,
+          {
+            'status': 'calling',
+            'currentLeadId': leadId,
+            'lastSeen': ServerValue.timestamp,
+          },
+        );
+        if (!mounted) return;
+        widget.onLeadAssigned(lead);
+        CallerShell.shellKey.currentState?.navigateTo(1);
+      } else {
+        // No lead returned
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No leads available in queue')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: _loading ? SystemMouseCursors.basic : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTapDown: (_) => setState(() => _pressed = true),
         onTapUp: (_) => setState(() => _pressed = false),
         onTapCancel: () => setState(() => _pressed = false),
-        onTap: () {},
+        onTap: _loading ? null : _handleTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 130),
           height: 56,
@@ -342,23 +444,33 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
                     : _primary,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
-              BoxShadow(
-                color: _primary.withOpacity(_hovered ? 0.35 : 0.20),
-                blurRadius: _hovered ? 16 : 8,
-                offset: const Offset(0, 4),
-              ),
+              if (!_loading)
+                BoxShadow(
+                  color: _primary.withOpacity(_hovered ? 0.35 : 0.20),
+                  blurRadius: _hovered ? 16 : 8,
+                  offset: const Offset(0, 4),
+                ),
             ],
           ),
           alignment: Alignment.center,
-          child: Text(
-            widget.role == 'warm' ? 'Get Next Callback →' : 'Get Next Lead →',
-            style: GoogleFonts.inter(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-              letterSpacing: 0.2,
-            ),
-          ),
+          child: _loading
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2.5,
+                  ),
+                )
+              : Text(
+                  widget.role == 'warm' ? 'Get Next Callback →' : 'Get Next Lead →',
+                  style: GoogleFonts.inter(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 0.2,
+                  ),
+                ),
         ),
       ),
     );

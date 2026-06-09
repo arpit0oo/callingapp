@@ -25,7 +25,8 @@ class LeadService {
 
       // Check it's still raw inside transaction
       final freshLead = await transaction.get(leadRef);
-      if (freshLead.data()?['status'] != 'raw') return;
+      final freshData = freshLead.data() as Map<String, dynamic>?;
+      if (freshData?['status'] != 'raw') return;
 
       // Lock it
       transaction.update(leadRef, {
