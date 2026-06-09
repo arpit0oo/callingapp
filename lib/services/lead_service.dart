@@ -3,42 +3,33 @@ import 'firestore_service.dart';
 
 class LeadService {
 
-  // Get next available lead for caller — uses transaction for atomic locking
+  // Get next available lead for caller.
+  // NOTE: No transaction — db.runTransaction() is unreliable on Flutter Web.
+  // A small race condition is accepted here; migrate to a Cloud Function
+  // for atomic locking before production.
   static Future<Map<String, dynamic>?> getNextLead(
       String tenantId, String campaignId, String callerId) async {
-    final db = FirebaseFirestore.instance;
-    Map<String, dynamic>? assignedLead;
+    // 1. Query the first raw lead for this campaign, oldest first.
+    final query = await FirestoreService.leadsCol(tenantId)
+        .where('campaignId', isEqualTo: campaignId)
+        .where('status', isEqualTo: 'raw')
+        .orderBy('createdAt')
+        .limit(1)
+        .get();
 
-    await db.runTransaction((transaction) async {
-      // Find first pending lead
-      final query = await FirestoreService.leadsCol(tenantId)
-          .where('campaignId', isEqualTo: campaignId)
-          .where('status', isEqualTo: 'raw')
-          .orderBy('createdAt')
-          .limit(1)
-          .get();
+    if (query.docs.isEmpty) return null;
 
-      if (query.docs.isEmpty) return;
+    final leadDoc = query.docs.first;
 
-      final leadDoc = query.docs.first;
-      final leadRef = leadDoc.reference;
-
-      // Check it's still raw inside transaction
-      final freshLead = await transaction.get(leadRef);
-      final freshData = freshLead.data() as Map<String, dynamic>?;
-      if (freshData?['status'] != 'raw') return;
-
-      // Lock it
-      transaction.update(leadRef, {
-        'status': 'locked',
-        'assignedTo': callerId,
-        'lockedAt': FieldValue.serverTimestamp(),
-      });
-
-      assignedLead = {'id': leadDoc.id, ...leadDoc.data() as Map<String, dynamic>};
+    // 2. Immediately lock it with a simple update (no transaction).
+    await leadDoc.reference.update({
+      'status': 'locked',
+      'assignedTo': callerId,
+      'lockedAt': FieldValue.serverTimestamp(),
     });
 
-    return assignedLead;
+    // 3. Return the lead data with its document ID included.
+    return {'id': leadDoc.id, ...leadDoc.data() as Map<String, dynamic>};
   }
 
   // Submit disposition after call

@@ -256,20 +256,6 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   // ── Recent calls ──────────────────────────────────────────────
 
   Widget _buildRecentCalls() {
-    final calls = widget.role == 'warm'
-        ? const [
-            _CallLog(time: '09:14', number: '+91 98765 43210', disposition: 'Interested',    chipColor: Color(0xFFE6F4EA), textColor: Color(0xFF137333)),
-            _CallLog(time: '09:32', number: '+91 87654 32109', disposition: 'Reschedule',    chipColor: Color(0xFFE8F0FE), textColor: Color(0xFF1A73E8)),
-            _CallLog(time: '09:51', number: '+91 76543 21098', disposition: 'Not Interested', chipColor: Color(0xFFF1F3F4), textColor: Color(0xFF5F6368)),
-            _CallLog(time: '10:08', number: '+91 65432 10987', disposition: 'DNC',           chipColor: Color(0xFFFCE8E6), textColor: Color(0xFFD93025)),
-          ]
-        : const [
-            _CallLog(time: '09:14', number: '+91 98765 43210', disposition: 'Interested', chipColor: Color(0xFFE6F4EA), textColor: Color(0xFF137333)),
-            _CallLog(time: '09:32', number: '+91 87654 32109', disposition: 'No Answer',  chipColor: Color(0xFFF1F3F4), textColor: Color(0xFF5F6368)),
-            _CallLog(time: '09:51', number: '+91 76543 21098', disposition: 'WTL',        chipColor: Color(0xFFE8F0FE), textColor: Color(0xFF1A73E8)),
-            _CallLog(time: '10:08', number: '+91 65432 10987', disposition: 'Busy',       chipColor: Color(0xFFFEF3E2), textColor: Color(0xFFE37400)),
-          ];
-
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -284,7 +270,64 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
             ),
           ),
           const SizedBox(height: 12),
-          ...calls.map((c) => _CallLogRow(log: c)),
+          FutureBuilder<QuerySnapshot>(
+            future: FirebaseFirestore.instance
+                .collection('tenants')
+                .doc(AppSession.tenantId)
+                .collection('leads')
+                .where('assignedTo', isEqualTo: AppSession.userId)
+                .where('status', isEqualTo: 'disposed')
+                .orderBy('updatedAt', descending: true)
+                .limit(5)
+                .get(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                );
+              }
+
+              final docs = snapshot.data?.docs ?? [];
+
+              if (docs.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    'No recent calls yet.',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: _textHint,
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
+                children: docs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final phone = data['phone']?.toString() ?? '—';
+                  final disposition =
+                      data['dispositionLabel']?.toString() ?? '—';
+                  return _CallLogRow(
+                    log: _CallLog(
+                      time: '',
+                      number: phone,
+                      disposition: disposition,
+                      chipColor: const Color(0xFFF1F3F4),
+                      textColor: const Color(0xFF5F6368),
+                    ),
+                  );
+                }).toList(),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -420,6 +463,13 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
         // No lead returned
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No leads available in queue')),
+        );
+      }
+    } catch (e) {
+      print('GetNextLead error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
         );
       }
     } finally {

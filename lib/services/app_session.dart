@@ -3,7 +3,8 @@ class AppSession {
   static String userId = "test_user";
   static String name = "";
   static String role = AppRoles.companyAdmin;
-  static String campaignId = "";
+  static String campaignId   = "";
+  static String campaignName = "";
 }
 
 class AppRoles {

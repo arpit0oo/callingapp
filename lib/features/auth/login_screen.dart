@@ -128,6 +128,23 @@ class _LoginScreenState extends State<LoginScreen> {
       AppSession.campaignId =
           assignedCampaigns.isNotEmpty ? assignedCampaigns.first as String : '';
 
+      // Fetch campaign name for display in the workspace badge.
+      if (AppSession.campaignId.isNotEmpty) {
+        try {
+          final campaignSnap = await FirebaseFirestore.instance
+              .collection('tenants')
+              .doc(tenantId)
+              .collection('campaigns')
+              .doc(AppSession.campaignId)
+              .get();
+          AppSession.campaignName =
+              campaignSnap.data()?['name'] as String? ?? AppSession.campaignId;
+        } catch (_) {
+          // Non-fatal: fall back to the raw campaign ID.
+          AppSession.campaignName = AppSession.campaignId;
+        }
+      }
+
       if (!mounted) return;
 
       // 4. Role-based navigation

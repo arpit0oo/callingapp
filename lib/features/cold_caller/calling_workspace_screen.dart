@@ -48,6 +48,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   final Map<String, dynamic> _formData = {};
   /// TextEditingControllers for text/number fields, keyed by document ID.
   final Map<String, TextEditingController> _formControllers = {};
+  /// Fetched once in initState — avoids refetching on every timer rebuild.
+  Future<QuerySnapshot>? _schemaFuture;
 
   // ── Notes ─────────────────────────────────────────────────────
   final _notesCtrl = TextEditingController();
@@ -89,6 +91,17 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _seconds++);
     });
+    // Load form schema once; FutureBuilder below caches the result.
+    if (AppSession.campaignId.isNotEmpty) {
+      _schemaFuture = FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('campaigns')
+          .doc(AppSession.campaignId)
+          .collection('form_schema')
+          .orderBy('order')
+          .get();
+    }
   }
 
   @override
@@ -266,9 +279,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     final attempts = (widget.currentLead?['attempts'] as int?) ?? 0;
     final attemptLabel = '${_ordinal(attempts + 1)} attempt';
     final initials = _avatarInitials(phone);
-    final campaignLabel = AppSession.campaignId.isNotEmpty
-        ? AppSession.campaignId
-        : 'No Campaign';
+    final campaignLabel = AppSession.campaignName.isNotEmpty
+        ? AppSession.campaignName
+        : AppSession.campaignId.isNotEmpty
+            ? AppSession.campaignId
+            : 'No Campaign';
 
     return _Card(
       child: Column(
@@ -349,7 +364,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
 
   Widget _buildFormCard() {
     // Skip rendering if no campaign is assigned
-    if (AppSession.campaignId.isEmpty) {
+    if (AppSession.campaignId.isEmpty || _schemaFuture == null) {
       return _Card(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -364,17 +379,10 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       );
     }
 
-    final schemaStream = FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(AppSession.tenantId)
-        .collection('campaigns')
-        .doc(AppSession.campaignId)
-        .collection('form_schema')
-        .orderBy('order')
-        .snapshots();
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: schemaStream,
+    // FutureBuilder: schema is fetched once in initState and never re-fetched
+    // on timer-driven rebuilds, eliminating flickering.
+    return FutureBuilder<QuerySnapshot>(
+      future: _schemaFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return _Card(
@@ -433,7 +441,6 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                 Widget fieldWidget;
 
                 if (type == 'text' || type == 'number') {
-                  // Lazily create a controller for this field
                   final ctrl = _formControllers.putIfAbsent(
                     id, () => TextEditingController(),
                   );
@@ -452,8 +459,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     items: options,
                     onChanged: (v) => setState(() => _formData[id] = v),
                   );
-                } else if (type == 'chips') {
-                  // Selectable chip row (single-select)
+                } else if (type == 'radio' || type == 'chips') {
                   fieldWidget = Wrap(
                     spacing: 6,
                     runSpacing: 6,
@@ -489,7 +495,6 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     }).toList(),
                   );
                 } else {
-                  // Fallback: plain text input
                   final ctrl = _formControllers.putIfAbsent(
                     id, () => TextEditingController(),
                   );
