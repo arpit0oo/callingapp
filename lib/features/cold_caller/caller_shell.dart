@@ -29,7 +29,6 @@ class CallerShell extends StatefulWidget {
 
 class CallerShellState extends State<CallerShell> {
   int _selectedIndex = 0;
-  Map<String, dynamic>? _currentLead;
 
   @override
   void initState() {
@@ -56,14 +55,6 @@ class CallerShellState extends State<CallerShell> {
 
   /// Programmatically switch to any tab by index.
   void navigateTo(int index) => setState(() => _selectedIndex = index);
-
-  void setCurrentLead(Map<String, dynamic> lead) {
-    setState(() => _currentLead = lead);
-  }
-
-  void clearCurrentLead() {
-    setState(() => _currentLead = null);
-  }
 
   // ── Nav-bar items ─────────────────────────────────────────────
   static const _navItems = [
@@ -100,14 +91,8 @@ class CallerShellState extends State<CallerShell> {
                   child: IndexedStack(
                     index: _selectedIndex,
                     children: [
-                      CallerHomeContent(
-                        role: widget.role,
-                        onLeadAssigned: setCurrentLead,
-                      ),
-                      CallingWorkspaceContent(
-                        role: widget.role,
-                        currentLead: _currentLead,
-                      ),
+                      CallerHomeContent(role: widget.role),
+                      CallingWorkspaceContent(role: widget.role),
                       PerformanceContent(role: widget.role),
                     ],
                   ),

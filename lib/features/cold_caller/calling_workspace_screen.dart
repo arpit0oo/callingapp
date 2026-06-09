@@ -1,24 +1,16 @@
 import 'dart:async';
-
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../../services/app_session.dart';
-import '../../services/lead_service.dart';
-import '../../services/rtdb_service.dart';
-import 'caller_shell.dart';
+// ─────────────────────────────────────────────────────────────────────────────
+// Public entry-point (used by CallerShell index 1)
+// ─────────────────────────────────────────────────────────────────────────────
 
 class CallingWorkspaceContent extends StatefulWidget {
-  const CallingWorkspaceContent({
-    super.key,
-    required this.role,
-    required this.currentLead,
-  });
+  const CallingWorkspaceContent({super.key, required this.role});
 
+  /// "cold" = raw leads, "warm" = callbacks.
   final String role;
-  final Map<String, dynamic>? currentLead;
 
   @override
   State<CallingWorkspaceContent> createState() =>
@@ -26,6 +18,7 @@ class CallingWorkspaceContent extends StatefulWidget {
 }
 
 class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
+  // ── Colors ────────────────────────────────────────────────────
   static const _primary = Color(0xFF1A73E8);
   static const _textPrimary = Color(0xFF202124);
   static const _textSecondary = Color(0xFF5F6368);
@@ -33,352 +26,172 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   static const _border = Color(0xFFE8EAED);
   static const _bg = Color(0xFFF8F9FA);
 
-  final _notesCtrl = TextEditingController();
-  final Map<String, TextEditingController> _fieldControllers = {};
-  final Map<String, dynamic> _fieldValues = {};
-
-  List<_FormFieldConfig> _formFields = [];
-  List<_DispositionOption> _dispositions = [];
-  bool _loadingConfig = true;
-  bool _submitting = false;
-  String? _selectedDisposition;
-
+  // ── Timer ─────────────────────────────────────────────────────
   int _seconds = 0;
   Timer? _timer;
+
+  // ── Form state ────────────────────────────────────────────────
+  final _nameCtrl = TextEditingController(text: 'Rajesh Kumar');
+  final _incomeCtrl = TextEditingController();
+  final _notesCtrl = TextEditingController();
+  String? _selectedCity;
+  String? _selectedInterest;
+  final _cities = ['Lucknow', 'Delhi', 'Mumbai'];
+  final _interests = ['High', 'Medium', 'Low'];
+
+  // ── Disposition state ─────────────────────────────────────────
+  String? _selectedDisposition;
+  String? _cbDate;
+  String? _cbTime;
+  bool _showSuccess = false;
+
+  final _callbackDates = ['Today', 'Tomorrow', 'In 2 days', 'In 3 days'];
+  final _callbackTimes = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM', '06:00 PM'];
+
+  static const _coldDispositions = [
+    _Dispo(label: 'Interested',   color: Color(0xFF34A853), bg: Color(0xFFE6F4EA)),
+    _Dispo(label: 'WTL',         color: Color(0xFF1A73E8), bg: Color(0xFFE8F0FE)),
+    _Dispo(label: 'CBL',         color: Color(0xFF1A73E8), bg: Color(0xFFE8F0FE)),
+    _Dispo(label: 'No Need',     color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
+    _Dispo(label: 'DNC',         color: Color(0xFFD93025), bg: Color(0xFFFCE8E6)),
+    _Dispo(label: 'No Answer',   color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
+    _Dispo(label: 'Busy',        color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
+    _Dispo(label: 'Invalid No.', color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
+    _Dispo(label: 'Switched Off',color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
+  ];
+
+  static const _warmDispositions = [
+    _Dispo(label: 'Interested',    color: Color(0xFF34A853), bg: Color(0xFFE6F4EA)),
+    _Dispo(label: 'Not Interested',color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
+    _Dispo(label: 'Reschedule',    color: Color(0xFF1A73E8), bg: Color(0xFFE8F0FE)),
+    _Dispo(label: 'DNC',           color: Color(0xFFD93025), bg: Color(0xFFFCE8E6)),
+  ];
+
+  List<_Dispo> get _dispositions =>
+      widget.role == 'warm' ? _warmDispositions : _coldDispositions;
 
   @override
   void initState() {
     super.initState();
-    _loadWorkspaceConfig();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || widget.currentLead == null) return;
       setState(() => _seconds++);
     });
   }
 
   @override
-  void didUpdateWidget(covariant CallingWorkspaceContent oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (_leadIdFrom(oldWidget.currentLead) != _leadId) {
-      setState(_resetForCurrentLead);
-    }
-  }
-
-  @override
   void dispose() {
     _timer?.cancel();
+    _nameCtrl.dispose();
+    _incomeCtrl.dispose();
     _notesCtrl.dispose();
-    for (final controller in _fieldControllers.values) {
-      controller.dispose();
-    }
     super.dispose();
   }
 
-  Future<void> _loadWorkspaceConfig() async {
-    setState(() => _loadingConfig = true);
-
-    final campaignRef = FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(AppSession.tenantId)
-        .collection('campaigns')
-        .doc(AppSession.campaignId);
-
-    try {
-      final results = await Future.wait([
-        campaignRef.collection('form_schema').orderBy('order').get(),
-        campaignRef.collection('disposition_config').orderBy('order').get(),
-      ]);
-
-      final formFields = (results[0] as QuerySnapshot)
-          .docs
-          .map((doc) => _FormFieldConfig.fromDoc(doc))
-          .toList();
-      final dispositions = (results[1] as QuerySnapshot)
-          .docs
-          .map((doc) => _DispositionOption.fromDoc(doc))
-          .toList();
-
-      if (!mounted) return;
-
-      setState(() {
-        _formFields = formFields;
-        _dispositions = dispositions;
-        _loadingConfig = false;
-        _resetForCurrentLead();
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _loadingConfig = false);
-    }
-  }
-
-  void _resetForCurrentLead() {
-    _selectedDisposition = null;
-    _notesCtrl.clear();
-    _seconds = 0;
-    _fieldValues.clear();
-
-    for (final field in _formFields) {
-      final seededValue = _seedValueForField(field);
-      final controller = _fieldControllers[field.key];
-
-      if (controller != null) {
-        controller.text = seededValue is String ? seededValue : '';
-      }
-
-      if (seededValue is String && seededValue.isNotEmpty) {
-        _fieldValues[field.key] = seededValue;
-      }
-      if (seededValue is List && seededValue.isNotEmpty) {
-        _fieldValues[field.key] = List<String>.from(seededValue);
-      }
-    }
-  }
-
-  String? get _leadId => _leadIdFrom(widget.currentLead);
-
-  String? _leadIdFrom(Map<String, dynamic>? lead) {
-    final value = lead?['id'] ?? lead?['leadId'];
-    if (value == null) return null;
-    final text = value.toString().trim();
-    return text.isEmpty ? null : text;
-  }
-
-  String get _leadPhone {
-    return _readLeadValue(['phone', 'phoneNumber', 'mobile', 'mobileNumber']) ??
-        'Unknown number';
-  }
-
-  String get _leadName {
-    return _readLeadValue(['name', 'fullName', 'leadName']) ?? 'Current Lead';
-  }
-
-  String? _readLeadValue(List<String> keys) {
-    final lead = widget.currentLead;
-    if (lead == null) return null;
-
-    for (final key in keys) {
-      final value = lead[key];
-      if (value != null && value.toString().trim().isNotEmpty) {
-        return value.toString();
-      }
-    }
-    return null;
-  }
-
-  dynamic _seedValueForField(_FormFieldConfig field) {
-    final lead = widget.currentLead;
-    if (lead == null) return field.kind == _FieldKind.checkbox ? <String>[] : '';
-
-    final candidates = <String>{
-      field.key,
-      field.label,
-      _normalizeFieldKey(field.label),
-    };
-
-    dynamic rawValue;
-    for (final candidate in candidates) {
-      final value = lead[candidate];
-      if (value != null) {
-        rawValue = value;
-        break;
-      }
-    }
-
-    if (field.kind == _FieldKind.checkbox) {
-      if (rawValue is List) {
-        return rawValue.map((item) => item.toString()).toList();
-      }
-      if (rawValue is String && rawValue.trim().isNotEmpty) {
-        return [rawValue.trim()];
-      }
-      return <String>[];
-    }
-
-    return rawValue?.toString() ?? '';
-  }
-
-  String _normalizeFieldKey(String value) {
-    return value
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'^_+|_+$'), '');
-  }
-
-  TextEditingController _controllerFor(_FormFieldConfig field) {
-    return _fieldControllers.putIfAbsent(field.key, () {
-      final initialValue = _seedValueForField(field);
-      final controller = TextEditingController(
-        text: initialValue is String ? initialValue : '',
-      );
-      if (controller.text.isNotEmpty) {
-        _fieldValues[field.key] = controller.text;
-      }
-      return controller;
-    });
-  }
-
   String get _timerLabel {
-    final minutes = (_seconds ~/ 60).toString().padLeft(2, '0');
-    final seconds = (_seconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
+    final m = (_seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (_seconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
-  bool get _canSubmit =>
-      !_submitting &&
-      widget.currentLead != null &&
-      _selectedDisposition != null &&
-      _leadId != null;
+  bool get _needsCallback =>
+      _selectedDisposition == 'WTL' ||
+      _selectedDisposition == 'CBL' ||
+      _selectedDisposition == 'Reschedule';
 
-  Future<void> _pickDate(_FormFieldConfig field) async {
-    final selected = await showDatePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-      initialDate: DateTime.now(),
-    );
+  bool get _canSubmit => _selectedDisposition != null;
 
-    if (selected == null || !mounted) return;
-
-    final value =
-        '${selected.year.toString().padLeft(4, '0')}-${selected.month.toString().padLeft(2, '0')}-${selected.day.toString().padLeft(2, '0')}';
-
+  void _resetForm() {
     setState(() {
-      _controllerFor(field).text = value;
-      _fieldValues[field.key] = value;
+      _incomeCtrl.clear();
+      _notesCtrl.clear();
+      _selectedCity = null;
+      _selectedInterest = null;
+      _selectedDisposition = null;
+      _cbDate = null;
+      _cbTime = null;
+      _seconds = 0;
     });
   }
 
-  Map<String, dynamic> _buildFormData() {
-    final data = <String, dynamic>{};
-
-    for (final field in _formFields) {
-      dynamic value = _fieldValues[field.key];
-
-      if ((value == null || value == '') &&
-          (field.kind == _FieldKind.text ||
-              field.kind == _FieldKind.number ||
-              field.kind == _FieldKind.date)) {
-        value = _fieldControllers[field.key]?.text.trim();
+  void _submit() {
+    setState(() => _showSuccess = true);
+    Future.delayed(const Duration(milliseconds: 1400), () {
+      if (mounted) {
+        setState(() => _showSuccess = false);
+        _resetForm();
       }
-
-      if (value is String && value.trim().isEmpty) {
-        continue;
-      }
-      if (value is List && value.isEmpty) {
-        continue;
-      }
-      if (value == null) {
-        continue;
-      }
-
-      data[field.label] = value;
-    }
-
-    return data;
+    });
   }
 
-  Future<void> _submit() async {
-    if (!_canSubmit) return;
-
-    final leadId = _leadId;
-    if (leadId == null) return;
-
-    setState(() => _submitting = true);
-
-    try {
-      await LeadService.submitDisposition(
-        AppSession.tenantId,
-        leadId,
-        {
-          'campaignId': AppSession.campaignId,
-          'dispositionLabel': _selectedDisposition,
-          'formData': _buildFormData(),
-          'notes': _notesCtrl.text.trim(),
-          'disposedBy': AppSession.userId,
-        },
-      );
-
-      await RtdbService.updateCallerState(
-        AppSession.tenantId,
-        AppSession.userId,
-        {
-          'status': 'idle',
-          'currentLeadId': '',
-          'lastSeen': ServerValue.timestamp,
-        },
-      );
-
-      CallerShell.shellKey.currentState?.clearCurrentLead();
-      CallerShell.shellKey.currentState?.navigateTo(0);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to submit disposition: $error')),
-      );
-      setState(() => _submitting = false);
-      return;
-    }
-
-    if (!mounted) return;
-    setState(() => _submitting = false);
-  }
-
+  // ── Build ──────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    if (widget.currentLead == null) {
-      return Scaffold(
-        backgroundColor: _bg,
-        appBar: _buildTopBar(title: 'Workspace'),
-        body: _buildEmptyState(),
-      );
-    }
-
     return Scaffold(
       backgroundColor: _bg,
-      appBar: _buildTopBar(title: _leadPhone),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildLeadCard(),
-            const SizedBox(height: 12),
-            _buildFormCard(),
-            const SizedBox(height: 12),
-            _buildNotesCard(),
-            const SizedBox(height: 12),
-            _buildDispositionCard(),
-          ],
-        ),
+      body: Stack(
+        children: [
+          Column(
+            children: [
+              _buildTopBar(),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 90),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildLeadCard(),
+                      const SizedBox(height: 12),
+                      _buildFormCard(),
+                      const SizedBox(height: 12),
+                      _buildNotesCard(),
+                      const SizedBox(height: 12),
+                      _buildDispositionCard(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // ── Fixed bottom bar ───────────────────────────────────
+          Positioned(
+            left: 0, right: 0, bottom: 0,
+            child: _buildBottomBar(),
+          ),
+
+          // ── Success overlay ────────────────────────────────────
+          if (_showSuccess) _buildSuccessOverlay(),
+        ],
       ),
-      bottomNavigationBar: _buildBottomBar(),
     );
   }
 
-  PreferredSizeWidget _buildTopBar({required String title}) {
-    return AppBar(
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.white,
-      elevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, size: 22, color: _textPrimary),
-        onPressed: () => CallerShell.shellKey.currentState?.navigateTo(0),
-      ),
-      centerTitle: true,
-      title: Text(
-        title,
-        style: GoogleFonts.inter(
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          color: _textPrimary,
-        ),
-      ),
-      actions: [
-        Padding(
-          padding: const EdgeInsets.only(right: 16),
-          child: Center(
+  // ── Top bar ───────────────────────────────────────────────────
+
+  Widget _buildTopBar() {
+    return Container(
+      height: 56,
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, size: 22, color: Color(0xFF202124)),
+            onPressed: () {},
+          ),
+          Expanded(
+            child: Text(
+              'Current Lead',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: _textPrimary,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
             child: Text(
               _timerLabel,
               style: GoogleFonts.inter(
@@ -388,117 +201,85 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.headset_mic_outlined, size: 48, color: _textHint),
-            const SizedBox(height: 16),
-            Text(
-              'No active lead',
-              style: GoogleFonts.inter(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color: _textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Pick a lead from the Home tab to start calling.',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                color: _textSecondary,
-              ),
-            ),
-            const SizedBox(height: 20),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: _primary,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              ),
-              onPressed: () => CallerShell.shellKey.currentState?.navigateTo(0),
-              child: Text(
-                'Go to Home tab',
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ],
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildLeadCard() {
-    final initials = _leadName.isNotEmpty
-        ? _leadName
-            .split(' ')
-            .where((part) => part.isNotEmpty)
-            .take(2)
-            .map((part) => part[0].toUpperCase())
-            .join()
-        : 'LD';
+  // ── Lead card ─────────────────────────────────────────────────
 
+  Widget _buildLeadCard() {
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              // Avatar
               Container(
-                width: 56,
-                height: 56,
+                width: 56, height: 56,
                 decoration: const BoxDecoration(
-                  color: _primary,
+                  color: Color(0xFF1A73E8),
                   shape: BoxShape.circle,
                 ),
                 alignment: Alignment.center,
-                child: Text(
-                  initials,
-                  style: GoogleFonts.inter(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
+                child: Text('RK',
+                    style: GoogleFonts.inter(
+                        fontSize: 18, fontWeight: FontWeight.w700,
+                        color: Colors.white)),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _leadName,
-                      style: GoogleFonts.inter(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: _textPrimary,
-                      ),
-                    ),
+                    Text('Rajesh Kumar',
+                        style: GoogleFonts.inter(
+                            fontSize: 18, fontWeight: FontWeight.w700,
+                            color: _textPrimary)),
                     const SizedBox(height: 4),
-                    Text(
-                      _leadPhone,
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        color: _textSecondary,
-                      ),
+                    Row(
+                      children: [
+                        Text('+91 98765 43210',
+                            style: GoogleFonts.inter(
+                                fontSize: 14, color: _textSecondary)),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () {},
+                          child: Container(
+                            width: 30, height: 30,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF34A853),
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            alignment: Alignment.center,
+                            child: const Icon(Icons.call, size: 15,
+                                color: Colors.white),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Previous attempt + campaign tag
+          Row(
+            children: [
+              _Badge(label: '2nd attempt',
+                  bg: const Color(0xFFFEF3E2),
+                  fg: const Color(0xFFE37400)),
+              const SizedBox(width: 8),
+              Text('Last: No Answer',
+                  style: GoogleFonts.inter(
+                      fontSize: 12, color: _textSecondary)),
+              const Spacer(),
+              _Badge(label: 'Xpert Tutor',
+                  bg: const Color(0xFFE8F0FE),
+                  fg: const Color(0xFF1A73E8)),
             ],
           ),
         ],
@@ -506,116 +287,87 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     );
   }
 
+  // ── Dynamic form card ─────────────────────────────────────────
+
   Widget _buildFormCard() {
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle('Campaign Form'),
+          _SectionTitle('Campaign Form'),
           const SizedBox(height: 12),
-          if (_loadingConfig)
-            const Center(child: CircularProgressIndicator())
-          else if (_formFields.isEmpty)
-            Text(
-              'No form fields configured for this campaign.',
-              style: GoogleFonts.inter(fontSize: 13, color: _textSecondary),
-            )
-          else
-            ..._formFields.map((field) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _FieldLabel(field.label),
-                    const SizedBox(height: 6),
-                    _buildDynamicField(field),
-                  ],
+
+          // Full Name
+          _FieldLabel('Full Name'),
+          const SizedBox(height: 5),
+          _CompactTextField(controller: _nameCtrl, hint: 'Full name'),
+          const SizedBox(height: 12),
+
+          // Monthly Income
+          _FieldLabel('Monthly Income'),
+          const SizedBox(height: 5),
+          _CompactTextField(
+              controller: _incomeCtrl,
+              hint: 'Enter amount',
+              keyboardType: TextInputType.number),
+          const SizedBox(height: 12),
+
+          // City dropdown
+          _FieldLabel('City'),
+          const SizedBox(height: 5),
+          _CompactDropdown(
+            value: _selectedCity,
+            hint: 'Select city',
+            items: _cities,
+            onChanged: (v) => setState(() => _selectedCity = v),
+          ),
+          const SizedBox(height: 12),
+
+          // Interest Level radios
+          _FieldLabel('Interest Level'),
+          const SizedBox(height: 6),
+          Row(
+            children: _interests.map((opt) {
+              final sel = _selectedInterest == opt;
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() => _selectedInterest = opt),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: sel ? const Color(0xFF1A73E8) : Colors.white,
+                      border: Border.all(
+                          color: sel
+                              ? const Color(0xFF1A73E8)
+                              : const Color(0xFFE8EAED)),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(opt,
+                        style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: sel ? Colors.white : _textSecondary)),
+                  ),
                 ),
               );
-            }),
+            }).toList(),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildDynamicField(_FormFieldConfig field) {
-    switch (field.kind) {
-      case _FieldKind.dropdown:
-        return _CompactDropdownFormField(
-          value: _fieldValues[field.key] as String?,
-          hint: 'Select ${field.label}',
-          items: field.options,
-          onChanged: (value) => setState(() => _fieldValues[field.key] = value),
-        );
-      case _FieldKind.radio:
-        return Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: field.options.map((option) {
-            final selected = _fieldValues[field.key] == option;
-            return ChoiceChip(
-              label: Text(option),
-              selected: selected,
-              onSelected: (_) {
-                setState(() => _fieldValues[field.key] = option);
-              },
-            );
-          }).toList(),
-        );
-      case _FieldKind.checkbox:
-        final selectedValues =
-            List<String>.from(_fieldValues[field.key] as List? ?? <String>[]);
-        return Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: field.options.map((option) {
-            final selected = selectedValues.contains(option);
-            return FilterChip(
-              label: Text(option),
-              selected: selected,
-              onSelected: (isSelected) {
-                setState(() {
-                  if (isSelected) {
-                    selectedValues.add(option);
-                  } else {
-                    selectedValues.remove(option);
-                  }
-                  _fieldValues[field.key] = List<String>.from(selectedValues);
-                });
-              },
-            );
-          }).toList(),
-        );
-      case _FieldKind.date:
-        return _CompactTextField(
-          controller: _controllerFor(field),
-          hint: 'Select date',
-          readOnly: true,
-          onTap: () => _pickDate(field),
-        );
-      case _FieldKind.number:
-        return _CompactTextField(
-          controller: _controllerFor(field),
-          hint: field.label,
-          keyboardType: TextInputType.number,
-          onChanged: (value) => _fieldValues[field.key] = value,
-        );
-      case _FieldKind.text:
-        return _CompactTextField(
-          controller: _controllerFor(field),
-          hint: field.label,
-          onChanged: (value) => _fieldValues[field.key] = value,
-        );
-    }
-  }
+  // ── Notes card ────────────────────────────────────────────────
 
   Widget _buildNotesCard() {
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle('Add Notes'),
+          _SectionTitle('Add Notes'),
           const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
@@ -639,66 +391,247 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     );
   }
 
+  // ── Disposition card ──────────────────────────────────────────
+
   Widget _buildDispositionCard() {
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _SectionTitle('Select Disposition'),
+          _SectionTitle('Select Disposition'),
           const SizedBox(height: 12),
-          if (_loadingConfig)
-            const Center(child: CircularProgressIndicator())
-          else if (_dispositions.isEmpty)
-            Text(
-              'No dispositions configured for this campaign.',
-              style: GoogleFonts.inter(fontSize: 13, color: _textSecondary),
-            )
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _dispositions.map((disposition) {
-                final selected = _selectedDisposition == disposition.label;
-                return ChoiceChip(
-                  label: Text(disposition.label),
-                  selected: selected,
-                  selectedColor: disposition.color.withOpacity(0.18),
-                  side: BorderSide(color: disposition.color),
-                  labelStyle: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: selected ? disposition.color : _textSecondary,
-                  ),
-                  onSelected: (_) {
-                    setState(() => _selectedDisposition = disposition.label);
-                  },
-                );
-              }).toList(),
+
+          // Grid — 3 per row
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _dispositions.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 2.6,
             ),
+            itemBuilder: (_, i) {
+              final d = _dispositions[i];
+              final sel = _selectedDisposition == d.label;
+              return GestureDetector(
+                onTap: () => setState(() {
+                  _selectedDisposition = d.label;
+                  if (!_needsCallback) { _cbDate = null; _cbTime = null; }
+                }),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 130),
+                  decoration: BoxDecoration(
+                    color: sel ? d.color : Colors.white,
+                    border: Border.all(
+                        color: d.color,
+                        width: sel ? 0 : 1.4),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  alignment: Alignment.center,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (sel) ...[
+                        const Icon(Icons.check, size: 11, color: Colors.white),
+                        const SizedBox(width: 3),
+                      ],
+                      Flexible(
+                        child: Text(d.label,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: sel ? Colors.white : d.color)),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+
+          // Callback scheduler (WTL / CBL)
+          if (_needsCallback) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F0FE),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Schedule Callback',
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF1A73E8))),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _CompactDropdown(
+                          value: _cbDate,
+                          hint: 'Date',
+                          items: _callbackDates,
+                          onChanged: (v) => setState(() => _cbDate = v),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _CompactDropdown(
+                          value: _cbTime,
+                          hint: 'Time',
+                          items: _callbackTimes,
+                          onChanged: (v) => setState(() => _cbTime = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+
+  // ── Bottom bar ────────────────────────────────────────────────
 
   Widget _buildBottomBar() {
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(top: BorderSide(color: _border)),
+        border: Border(top: BorderSide(color: Color(0xFFE8EAED))),
       ),
       child: _SubmitButton(
         enabled: _canSubmit,
-        loading: _submitting,
         onTap: _submit,
+      ),
+    );
+  }
+
+  // ── Success overlay ───────────────────────────────────────────
+
+  Widget _buildSuccessOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.35),
+        alignment: Alignment.center,
+        child: Container(
+          width: 160,
+          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 24,
+                  offset: const Offset(0, 6))
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 52, height: 52,
+                decoration: const BoxDecoration(
+                    color: Color(0xFF34A853), shape: BoxShape.circle),
+                child: const Icon(Icons.check, color: Colors.white, size: 28),
+              ),
+              const SizedBox(height: 12),
+              Text('Submitted!',
+                  style: GoogleFonts.inter(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF202124))),
+              const SizedBox(height: 4),
+              Text('Loading next lead…',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                      fontSize: 11, color: const Color(0xFF9AA0A6))),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Submit button with animated state
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SubmitButton extends StatefulWidget {
+  const _SubmitButton({required this.enabled, required this.onTap});
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  State<_SubmitButton> createState() => _SubmitButtonState();
+}
+
+class _SubmitButtonState extends State<_SubmitButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final activeColor = const Color(0xFF1A73E8);
+    final hoverColor = const Color(0xFF1557B0);
+    final disabledColor = const Color(0xFFBDC1C6);
+
+    return MouseRegion(
+      cursor: widget.enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.enabled ? widget.onTap : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          height: 52,
+          decoration: BoxDecoration(
+            color: widget.enabled
+                ? (_hovered ? hoverColor : activeColor)
+                : disabledColor,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: widget.enabled
+                ? [
+                    BoxShadow(
+                        color: activeColor.withOpacity(0.28),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4))
+                  ]
+                : [],
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            'Submit & Next Lead',
+            style: GoogleFonts.inter(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared small widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _Card extends StatelessWidget {
   const _Card({required this.child});
-
   final Widget child;
 
   @override
@@ -710,10 +643,9 @@ class _Card extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 10,
+              offset: const Offset(0, 2))
         ],
       ),
       child: child,
@@ -723,36 +655,46 @@ class _Card extends StatelessWidget {
 
 class _SectionTitle extends StatelessWidget {
   const _SectionTitle(this.text);
-
   final String text;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: GoogleFonts.inter(
-        fontSize: 14,
-        fontWeight: FontWeight.w700,
-        color: const Color(0xFF5F6368),
-      ),
-    );
+    return Text(text,
+        style: GoogleFonts.inter(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: const Color(0xFF5F6368)));
   }
 }
 
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.text);
-
   final String text;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: GoogleFonts.inter(
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
-        color: const Color(0xFF5F6368),
-      ),
+    return Text(text,
+        style: GoogleFonts.inter(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: const Color(0xFF5F6368)));
+  }
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.label, required this.bg, required this.fg});
+  final String label;
+  final Color bg;
+  final Color fg;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label,
+          style: GoogleFonts.inter(
+              fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }
@@ -762,17 +704,11 @@ class _CompactTextField extends StatelessWidget {
     required this.controller,
     required this.hint,
     this.keyboardType,
-    this.readOnly = false,
-    this.onTap,
-    this.onChanged,
   });
 
   final TextEditingController controller;
   final String hint;
   final TextInputType? keyboardType;
-  final bool readOnly;
-  final VoidCallback? onTap;
-  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -785,19 +721,11 @@ class _CompactTextField extends StatelessWidget {
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
-        readOnly: readOnly,
-        onTap: onTap,
-        onChanged: onChanged,
-        style: GoogleFonts.inter(
-          fontSize: 13,
-          color: const Color(0xFF202124),
-        ),
+        style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF202124)),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: GoogleFonts.inter(
-            fontSize: 13,
-            color: const Color(0xFF9AA0A6),
-          ),
+          hintStyle:
+              GoogleFonts.inter(fontSize: 13, color: const Color(0xFF9AA0A6)),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           border: InputBorder.none,
@@ -807,8 +735,8 @@ class _CompactTextField extends StatelessWidget {
   }
 }
 
-class _CompactDropdownFormField extends StatelessWidget {
-  const _CompactDropdownFormField({
+class _CompactDropdown extends StatelessWidget {
+  const _CompactDropdown({
     required this.value,
     required this.hint,
     required this.items,
@@ -822,192 +750,42 @@ class _CompactDropdownFormField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final safeValue = items.contains(value) ? value : null;
-
-    return DropdownButtonFormField<String>(
-      value: safeValue,
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: GoogleFonts.inter(
-          fontSize: 13,
-          color: const Color(0xFF9AA0A6),
-        ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFFE8EAED)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFFE8EAED)),
-        ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE8EAED)),
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
       ),
-      items: items
-          .map((item) => DropdownMenuItem<String>(
-                value: item,
-                child: Text(
-                  item,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: const Color(0xFF202124),
-                  ),
-                ),
-              ))
-          .toList(),
-      onChanged: onChanged,
-    );
-  }
-}
-
-class _SubmitButton extends StatefulWidget {
-  const _SubmitButton({
-    required this.enabled,
-    required this.loading,
-    required this.onTap,
-  });
-
-  final bool enabled;
-  final bool loading;
-  final Future<void> Function() onTap;
-
-  @override
-  State<_SubmitButton> createState() => _SubmitButtonState();
-}
-
-class _SubmitButtonState extends State<_SubmitButton> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    const activeColor = Color(0xFF1A73E8);
-    const hoverColor = Color(0xFF1557B0);
-    const disabledColor = Color(0xFFBDC1C6);
-
-    return MouseRegion(
-      cursor: widget.enabled
-          ? SystemMouseCursors.click
-          : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.enabled
-            ? () {
-                widget.onTap();
-              }
-            : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 130),
-          height: 52,
-          decoration: BoxDecoration(
-            color: widget.enabled
-                ? (_hovered ? hoverColor : activeColor)
-                : disabledColor,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: widget.enabled
-                ? [
-                    BoxShadow(
-                      color: activeColor.withOpacity(0.28),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ]
-                : [],
-          ),
-          alignment: Alignment.center,
-          child: widget.loading
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2.4,
-                  ),
-                )
-              : Text(
-                  'Submit',
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          hint: Text(hint,
+              style: GoogleFonts.inter(
+                  fontSize: 13, color: const Color(0xFF9AA0A6))),
+          isExpanded: true,
+          icon: const Icon(Icons.keyboard_arrow_down,
+              size: 18, color: Color(0xFF9AA0A6)),
+          style: GoogleFonts.inter(
+              fontSize: 13, color: const Color(0xFF202124)),
+          items: items
+              .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+              .toList(),
+          onChanged: onChanged,
         ),
       ),
     );
   }
 }
 
-enum _FieldKind {
-  text,
-  number,
-  dropdown,
-  radio,
-  checkbox,
-  date,
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Disposition data model
+// ─────────────────────────────────────────────────────────────────────────────
 
-class _FormFieldConfig {
-  const _FormFieldConfig({
-    required this.key,
-    required this.label,
-    required this.kind,
-    required this.options,
-  });
-
-  factory _FormFieldConfig.fromDoc(QueryDocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-    final rawType = (data['type'] as String? ?? 'Text Input').toLowerCase();
-
-    _FieldKind kind;
-    if (rawType.contains('dropdown')) {
-      kind = _FieldKind.dropdown;
-    } else if (rawType.contains('radio')) {
-      kind = _FieldKind.radio;
-    } else if (rawType.contains('checkbox')) {
-      kind = _FieldKind.checkbox;
-    } else if (rawType.contains('date')) {
-      kind = _FieldKind.date;
-    } else if (rawType.contains('number')) {
-      kind = _FieldKind.number;
-    } else {
-      kind = _FieldKind.text;
-    }
-
-    return _FormFieldConfig(
-      key: doc.id,
-      label: data['label'] as String? ?? doc.id,
-      kind: kind,
-      options: (data['options'] as List<dynamic>? ?? [])
-          .map((item) => item.toString())
-          .toList(),
-    );
-  }
-
-  final String key;
-  final String label;
-  final _FieldKind kind;
-  final List<String> options;
-}
-
-class _DispositionOption {
-  const _DispositionOption({
-    required this.label,
-    required this.color,
-  });
-
-  factory _DispositionOption.fromDoc(QueryDocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-    final colorValue = (data['color'] as num?)?.toInt() ?? _primaryColorValue;
-
-    return _DispositionOption(
-      label: data['label'] as String? ?? doc.id,
-      color: Color(colorValue),
-    );
-  }
-
-  static const _primaryColorValue = 0xFF1A73E8;
-
+class _Dispo {
+  const _Dispo(
+      {required this.label, required this.color, required this.bg});
   final String label;
   final Color color;
+  final Color bg;
 }
