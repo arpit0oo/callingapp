@@ -79,29 +79,10 @@ class FormBuilderContent extends StatefulWidget {
 }
 
 class _FormBuilderContentState extends State<FormBuilderContent> {
-  // Pre-populated dummy fields
-  final List<_CanvasField> _fields = [
-    _CanvasField(type: _kFieldTypes[0], label: 'Full Name', required: true),
-    _CanvasField(
-      type: _kFieldTypes[1],
-      label: 'Monthly Income',
-      required: false,
-    ),
-    _CanvasField(
-      type: _kFieldTypes[2],
-      label: 'City',
-      required: true,
-      options: ['Lucknow', 'Delhi', 'Mumbai'],
-    ),
-    _CanvasField(
-      type: _kFieldTypes[3],
-      label: 'Interest Level',
-      required: true,
-      options: ['High', 'Medium', 'Low'],
-    ),
-  ];
+  final List<_CanvasField> _fields = [];
 
   bool _saving = false;
+  bool _loading = true;
 
   // Maps the human-readable field type label to a normalized Firestore value.
   static const _typeMap = <String, String>{
@@ -112,6 +93,59 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
     'Checkbox': 'checkbox',
     'Date Picker': 'date',
   };
+
+  // Reverse of _typeMap: Firestore value → _FieldType label.
+  static final _reverseTypeMap = <String, String>{
+    for (final e in _typeMap.entries) e.value: e.key,
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSchema();
+  }
+
+  Future<void> _loadSchema() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('campaigns')
+          .doc(widget.campaignId)
+          .collection('form_schema')
+          .orderBy('order')
+          .get();
+
+      if (!mounted) return;
+
+      final loaded = <_CanvasField>[];
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final storedType = data['type']?.toString() ?? '';
+        // Reverse-lookup: 'text' → 'Text Input', then find in _kFieldTypes.
+        final typeLabel = _reverseTypeMap[storedType] ?? storedType;
+        final fieldType = _kFieldTypes.firstWhere(
+          (ft) => ft.label == typeLabel,
+          orElse: () => _kFieldTypes[0], // fallback to Text Input
+        );
+        loaded.add(_CanvasField(
+          type: fieldType,
+          label: data['label']?.toString() ?? typeLabel,
+          required: data['required'] as bool? ?? false,
+          options: (data['options'] as List<dynamic>? ?? [])
+              .map((e) => e.toString())
+              .toList(),
+        ));
+      }
+
+      setState(() {
+        _fields.addAll(loaded);
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   Future<void> _saveForm() async {
     if (_saving) return;
@@ -151,6 +185,7 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Form saved')),
         );
+        Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
@@ -202,6 +237,11 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -394,6 +434,14 @@ class _FormCanvas extends StatelessWidget {
           ),
           child: Row(
             children: [
+              // ── Back button ───────────────────────
+              IconButton(
+                icon: const Icon(Icons.arrow_back,
+                    size: 20, color: _kTextLight),
+                tooltip: 'Back',
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 4),
               const Icon(
                 Icons.dynamic_form_outlined,
                 size: 20,
