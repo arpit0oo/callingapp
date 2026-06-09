@@ -1,8 +1,13 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../services/app_session.dart';
+import '../../services/campaign_service.dart';
 import '../../shared/widgets/status_badge.dart';
 import 'admin_shell.dart';
+import 'campaign_settings_screen.dart';
+import 'form_builder_screen.dart';
 
 // ─────────────────────────────────────────────
 //  Colour constants
@@ -32,7 +37,7 @@ BoxDecoration _card({double radius = 8}) => BoxDecoration(
     );
 
 // ─────────────────────────────────────────────
-//  Dummy data model
+//  Dummy fallback data (shown when Firestore has 0 docs)
 // ─────────────────────────────────────────────
 class _Campaign {
   const _Campaign({
@@ -43,46 +48,39 @@ class _Campaign {
     required this.createdDate,
   });
   final String name;
-  final String status; // 'Active' | 'Paused' | 'Archived'
+  final String status;
   final String manager;
   final String rawLeads;
   final String createdDate;
 }
 
-const _kAllCampaigns = [
+const _kDummyCampaigns = [
   _Campaign(
     name: 'Xpert Tutor',
-    status: 'Active',
+    status: 'active',
     manager: 'Amit',
     rawLeads: '12,500',
     createdDate: 'Jan 12, 2025',
   ),
   _Campaign(
     name: 'Solar Campaign',
-    status: 'Active',
+    status: 'active',
     manager: 'Rahul',
     rawLeads: '5,600',
     createdDate: 'Feb 3, 2025',
   ),
   _Campaign(
     name: 'DSA Campaign',
-    status: 'Paused',
+    status: 'paused',
     manager: 'Neha',
     rawLeads: '18,200',
     createdDate: 'Mar 1, 2025',
   ),
-  _Campaign(
-    name: 'New Batch',
-    status: 'Active',
-    manager: 'Amit',
-    rawLeads: '3,400',
-    createdDate: 'May 20, 2025',
-  ),
 ];
 
 const _kManagers = ['Amit', 'Rahul', 'Neha'];
-const _kStatuses = ['Active', 'Paused'];
-const _kFilterTabs = ['All', 'Active', 'Paused', 'Archived'];
+const _kStatuses = ['active', 'paused'];
+const _kFilterTabs = ['All', 'active', 'paused'];
 
 // ─────────────────────────────────────────────
 //  Campaign Content
@@ -95,278 +93,437 @@ class CampaignContent extends StatefulWidget {
 }
 
 class _CampaignContentState extends State<CampaignContent> {
-  // ── Panel state ──────────────────────────────
-  bool _panelOpen = false;
-  bool _isEditMode = false;
-  _Campaign? _editingCampaign;
-
   // ── Filter / search ──────────────────────────
   int _activeFilter = 0;
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
 
-  // ── Panel form controllers ───────────────────
-  final TextEditingController _nameCtrl = TextEditingController();
-  final TextEditingController _descCtrl = TextEditingController();
-  String _selectedManager = _kManagers.first;
-  String _selectedStatus = _kStatuses.first;
-
   @override
   void dispose() {
     _searchCtrl.dispose();
-    _nameCtrl.dispose();
-    _descCtrl.dispose();
     super.dispose();
   }
 
-  List<_Campaign> get _filtered {
+  // ── New Campaign dialog ──────────────────────
+  Future<void> _showNewCampaignDialog() async {
+    final nameCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('New Campaign', style: _inter(17, weight: FontWeight.w600)),
+        content: SizedBox(
+          width: 360,
+          child: TextField(
+            controller: nameCtrl,
+            autofocus: true,
+            style: _inter(14),
+            decoration: InputDecoration(
+              hintText: 'Enter campaign name',
+              hintStyle: _inter(13, color: _kGrey),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: _kBlue, width: 1.5),
+              ),
+              filled: true,
+              fillColor: _kBgPage,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: _inter(13, color: _kTextLight)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kBlue,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Create',
+                style: _inter(13, weight: FontWeight.w600, color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && nameCtrl.text.trim().isNotEmpty) {
+      await CampaignService.createCampaign(AppSession.tenantId, {
+        'name': nameCtrl.text.trim(),
+        'status': 'active',
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': AppSession.userId,
+      });
+    }
+    nameCtrl.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: _kBgPage,
+      child: StreamBuilder<QuerySnapshot>(
+        stream: CampaignService.getCampaigns(AppSession.tenantId),
+        builder: (context, snap) {
+          // Resolve docs or fallback dummy data
+          final bool isFirestore =
+              snap.hasData && snap.data!.docs.isNotEmpty;
+          final bool useDummy =
+              !snap.hasData || snap.data!.docs.isEmpty;
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Top Bar ───────────────────────────
+                Row(
+                  children: [
+                    Text('Campaigns',
+                        style: _inter(20, weight: FontWeight.w700)),
+                    const Spacer(),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _kBlue,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: _showNewCampaignDialog,
+                      icon: const Icon(Icons.add, size: 18, color: Colors.white),
+                      label: Text(
+                        'New Campaign',
+                        style: _inter(13,
+                            weight: FontWeight.w600, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+
+                // ── Campaign List Card ────────────────
+                Container(
+                  decoration: _card(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // ── Search + filters ──────────────
+                      Padding(
+                        padding:
+                            const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              height: 40,
+                              child: TextField(
+                                controller: _searchCtrl,
+                                onChanged: (v) =>
+                                    setState(() => _searchQuery = v),
+                                style: _inter(13),
+                                decoration: InputDecoration(
+                                  hintText: 'Search campaigns...',
+                                  hintStyle: _inter(13, color: _kGrey),
+                                  prefixIcon: const Icon(Icons.search,
+                                      size: 18, color: _kGrey),
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(vertical: 0),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide:
+                                        const BorderSide(color: _kBorder),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide:
+                                        const BorderSide(color: _kBorder),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    borderSide: const BorderSide(
+                                        color: _kBlue, width: 1.5),
+                                  ),
+                                  filled: true,
+                                  fillColor: const Color(0xFFF8F9FA),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children:
+                                  _kFilterTabs.asMap().entries.map((e) {
+                                final isActive = e.key == _activeFilter;
+                                final label = e.value == 'All'
+                                    ? 'All'
+                                    : e.value == 'active'
+                                        ? 'Active'
+                                        : 'Paused';
+                                return GestureDetector(
+                                  onTap: () => setState(
+                                      () => _activeFilter = e.key),
+                                  child: AnimatedContainer(
+                                    duration:
+                                        const Duration(milliseconds: 180),
+                                    margin: const EdgeInsets.only(right: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 7),
+                                    decoration: BoxDecoration(
+                                      color: isActive
+                                          ? _kBlue
+                                          : Colors.transparent,
+                                      borderRadius:
+                                          BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: isActive
+                                            ? _kBlue
+                                            : _kBorder,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      label,
+                                      style: _inter(12,
+                                          weight: FontWeight.w500,
+                                          color: isActive
+                                              ? Colors.white
+                                              : _kTextLight),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Divider(color: _kBorder, height: 1),
+
+                      // ── Loading indicator ──────────────
+                      if (snap.connectionState ==
+                              ConnectionState.waiting &&
+                          !snap.hasData)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 40),
+                          child: Center(
+                              child: CircularProgressIndicator()),
+                        )
+
+                      // ── Error state ────────────────────
+                      else if (snap.hasError)
+                        Padding(
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 40),
+                          child: Center(
+                            child: Text(
+                              'Failed to load campaigns.',
+                              style: _inter(14, color: _kGrey),
+                            ),
+                          ),
+                        )
+
+                      // ── Firestore rows or dummy fallback
+                      else if (isFirestore)
+                        _FirestoreTable(
+                          docs: _applyFilter(snap.data!.docs),
+                        )
+                      else
+                        _DummyTable(
+                          campaigns: _applyDummyFilter(_kDummyCampaigns),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  List<QueryDocumentSnapshot> _applyFilter(
+      List<QueryDocumentSnapshot> docs) {
     final tab = _kFilterTabs[_activeFilter];
-    return _kAllCampaigns.where((c) {
+    return docs.where((d) {
+      final data = d.data() as Map<String, dynamic>;
+      final status = (data['status'] as String? ?? '').toLowerCase();
+      final name = (data['name'] as String? ?? '').toLowerCase();
+      final matchFilter = tab == 'All' || status == tab;
+      final matchSearch = _searchQuery.isEmpty ||
+          name.contains(_searchQuery.toLowerCase());
+      return matchFilter && matchSearch;
+    }).toList();
+  }
+
+  List<_Campaign> _applyDummyFilter(List<_Campaign> list) {
+    final tab = _kFilterTabs[_activeFilter];
+    return list.where((c) {
       final matchFilter = tab == 'All' || c.status == tab;
       final matchSearch = _searchQuery.isEmpty ||
           c.name.toLowerCase().contains(_searchQuery.toLowerCase());
       return matchFilter && matchSearch;
     }).toList();
   }
+}
 
-  void _openCreate() {
-    _nameCtrl.clear();
-    _descCtrl.clear();
-    _selectedManager = _kManagers.first;
-    _selectedStatus = _kStatuses.first;
-    setState(() {
-      _isEditMode = false;
-      _editingCampaign = null;
-      _panelOpen = true;
-    });
-  }
+// ─────────────────────────────────────────────
+//  Firestore Table
+// ─────────────────────────────────────────────
+class _FirestoreTable extends StatelessWidget {
+  const _FirestoreTable({required this.docs});
+  final List<QueryDocumentSnapshot> docs;
 
-  void _openEdit(_Campaign c) {
-    _nameCtrl.text = c.name;
-    _descCtrl.text = '';
-    _selectedManager = c.manager;
-    _selectedStatus = c.status;
-    setState(() {
-      _isEditMode = true;
-      _editingCampaign = c;
-      _panelOpen = true;
-    });
-  }
-
-  void _closePanel() => setState(() => _panelOpen = false);
+  static const _columns = [
+    'Campaign Name',
+    'Status',
+    'Raw Leads',
+    'Actions',
+  ];
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: _kBgPage,
-      child: Stack(
-        children: [
-          _MainContent(
-            campaigns: _filtered,
-            activeFilter: _activeFilter,
-            searchCtrl: _searchCtrl,
-            onSearchChanged: (v) => setState(() => _searchQuery = v),
-            onFilterChanged: (i) => setState(() => _activeFilter = i),
-            onNewCampaign: _openCreate,
-            onEdit: _openEdit,
-          ),
-          // ── Dim overlay ──────────────────────────
-          if (_panelOpen)
-            GestureDetector(
-              onTap: _closePanel,
-              child: Container(color: Colors.black.withOpacity(0.18)),
-            ),
-          // ── Slide panel ──────────────────────────
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeOutCubic,
-            top: 0,
-            bottom: 0,
-            right: _panelOpen ? 0 : -440,
-            child: _SlidePanel(
-              isEditMode: _isEditMode,
-              nameCtrl: _nameCtrl,
-              descCtrl: _descCtrl,
-              selectedManager: _selectedManager,
-              selectedStatus: _selectedStatus,
-              onManagerChanged: (v) => setState(() => _selectedManager = v!),
-              onStatusChanged: (v) => setState(() => _selectedStatus = v!),
-              onClose: _closePanel,
-              onCancel: _closePanel,
-              onSave: _closePanel,
-              onOpenFormBuilder: () {
-                _closePanel();
-                AdminShell.shellKey.currentState?.navigateTo(5);
-              },
-              onOpenDisposition: () {
-                _closePanel();
-                AdminShell.shellKey.currentState?.navigateTo(6);
-              },
+    if (docs.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        child: Center(
+            child: Text('No campaigns found.',
+                style: _inter(14, color: _kGrey))),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: DataTable(
+              headingRowHeight: 44,
+              dataRowMinHeight: 56,
+              dataRowMaxHeight: 56,
+              columnSpacing: 24,
+              headingTextStyle:
+                  _inter(12, weight: FontWeight.w600, color: _kTextLight),
+              dataTextStyle: _inter(13),
+              columns:
+                  _columns.map((c) => DataColumn(label: Text(c))).toList(),
+              rows: docs.map((doc) => _buildRow(context, doc)).toList(),
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  DataRow _buildRow(BuildContext context, QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final name = data['name'] as String? ?? '—';
+    final status = (data['status'] as String? ?? 'active').toLowerCase();
+    final rawLeads = data['rawQueueCount']?.toString() ?? '0';
+    final isPaused = status == 'paused';
+
+    return DataRow(cells: [
+      DataCell(Text(name, style: _inter(13, weight: FontWeight.w500))),
+      DataCell(StatusBadge(
+        label: isPaused ? 'Paused' : 'Active',
+        color: isPaused ? _kGrey : _kGreen,
+      )),
+      DataCell(Text(rawLeads)),
+      DataCell(_FirestoreActionButtons(
+        doc: doc,
+        isPaused: isPaused,
+      )),
+    ]);
   }
 }
 
 // ─────────────────────────────────────────────
-//  Main Content
+//  Firestore Action Buttons
 // ─────────────────────────────────────────────
-class _MainContent extends StatelessWidget {
-  const _MainContent({
-    required this.campaigns,
-    required this.activeFilter,
-    required this.searchCtrl,
-    required this.onSearchChanged,
-    required this.onFilterChanged,
-    required this.onNewCampaign,
-    required this.onEdit,
+class _FirestoreActionButtons extends StatelessWidget {
+  const _FirestoreActionButtons({
+    required this.doc,
+    required this.isPaused,
   });
 
-  final List<_Campaign> campaigns;
-  final int activeFilter;
-  final TextEditingController searchCtrl;
-  final ValueChanged<String> onSearchChanged;
-  final ValueChanged<int> onFilterChanged;
-  final VoidCallback onNewCampaign;
-  final ValueChanged<_Campaign> onEdit;
+  final QueryDocumentSnapshot doc;
+  final bool isPaused;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Top Bar ───────────────────────────
-          Row(
-            children: [
-              Text('Campaigns', style: _inter(20, weight: FontWeight.w700)),
-              const Spacer(),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kBlue,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: onNewCampaign,
-                icon: const Icon(Icons.add, size: 18, color: Colors.white),
-                label: Text(
-                  'New Campaign',
-                  style: _inter(13,
-                      weight: FontWeight.w600, color: Colors.white),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Pencil — navigate to FormBuilderContent with campaignId
+        _IconBtn(
+          icon: Icons.edit_outlined,
+          tooltip: 'Edit Form',
+          color: _kBlue,
+          onTap: () {
+            // TODO: Pass campaignId to FormBuilderContent once it accepts the parameter
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const Scaffold(
+                  body: FormBuilderContent(),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 24),
-
-          // ── Campaign List Card ────────────────
-          Container(
-            decoration: _card(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Search + filters ──────────────
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Search bar
-                      SizedBox(
-                        height: 40,
-                        child: TextField(
-                          controller: searchCtrl,
-                          onChanged: onSearchChanged,
-                          style: _inter(13),
-                          decoration: InputDecoration(
-                            hintText: 'Search campaigns...',
-                            hintStyle: _inter(13, color: _kGrey),
-                            prefixIcon: const Icon(Icons.search,
-                                size: 18, color: _kGrey),
-                            contentPadding:
-                                const EdgeInsets.symmetric(vertical: 0),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: _kBorder),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: _kBorder),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide:
-                                  const BorderSide(color: _kBlue, width: 1.5),
-                            ),
-                            filled: true,
-                            fillColor: const Color(0xFFF8F9FA),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      // Filter tabs
-                      Row(
-                        children: _kFilterTabs.asMap().entries.map((e) {
-                          final isActive = e.key == activeFilter;
-                          return GestureDetector(
-                            onTap: () => onFilterChanged(e.key),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-                              margin: const EdgeInsets.only(right: 4),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 7),
-                              decoration: BoxDecoration(
-                                color: isActive
-                                    ? _kBlue
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color:
-                                      isActive ? _kBlue : _kBorder,
-                                ),
-                              ),
-                              child: Text(
-                                e.value,
-                                style: _inter(12,
-                                    weight: FontWeight.w500,
-                                    color: isActive
-                                        ? Colors.white
-                                        : _kTextLight),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
+            );
+          },
+        ),
+        const SizedBox(width: 4),
+        // Gear — navigate to CampaignSettingsContent with campaignId
+        _IconBtn(
+          icon: Icons.settings_outlined,
+          tooltip: 'Settings',
+          color: _kTextLight,
+          onTap: () {
+            // TODO: Pass campaignId to CampaignSettingsContent once it accepts the parameter
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const Scaffold(
+                  body: CampaignSettingsContent(),
                 ),
-                const SizedBox(height: 12),
-                const Divider(color: _kBorder, height: 1),
-
-                // ── Table ─────────────────────────
-                _CampaignTable(campaigns: campaigns, onEdit: onEdit),
-              ],
-            ),
-          ),
-        ],
-      ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 4),
+        // Pause / Resume
+        _IconBtn(
+          icon: isPaused
+              ? Icons.play_circle_outline
+              : Icons.pause_circle_outline,
+          tooltip: isPaused ? 'Resume' : 'Pause',
+          color: isPaused ? _kGreen : const Color(0xFFFA7B17),
+          onTap: () {
+            final newStatus = isPaused ? 'active' : 'paused';
+            CampaignService.setCampaignStatus(
+              AppSession.tenantId,
+              doc.id,
+              newStatus,
+            );
+          },
+        ),
+      ],
     );
   }
 }
 
 // ─────────────────────────────────────────────
-//  Campaign Table
+//  Dummy Table (fallback when Firestore is empty)
 // ─────────────────────────────────────────────
-class _CampaignTable extends StatelessWidget {
-  const _CampaignTable({required this.campaigns, required this.onEdit});
-
+class _DummyTable extends StatelessWidget {
+  const _DummyTable({required this.campaigns});
   final List<_Campaign> campaigns;
-  final ValueChanged<_Campaign> onEdit;
 
   static const _columns = [
     'Campaign Name',
@@ -383,12 +540,10 @@ class _CampaignTable extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 48),
         child: Center(
-          child: Text('No campaigns found.',
-              style: _inter(14, color: _kGrey)),
-        ),
+            child: Text('No campaigns found.',
+                style: _inter(14, color: _kGrey))),
       );
     }
-
     return LayoutBuilder(
       builder: (context, constraints) {
         return SingleChildScrollView(
@@ -414,16 +569,13 @@ class _CampaignTable extends StatelessWidget {
   }
 
   DataRow _buildRow(_Campaign c) {
-    final isActive = c.status == 'Active';
+    final isActive = c.status == 'active';
     return DataRow(cells: [
-      // Campaign Name
       DataCell(Text(c.name, style: _inter(13, weight: FontWeight.w500))),
-      // Status — reused shared StatusBadge
       DataCell(StatusBadge(
-        label: c.status,
+        label: isActive ? 'Active' : 'Paused',
         color: isActive ? _kGreen : _kGrey,
       )),
-      // Manager
       DataCell(Row(children: [
         CircleAvatar(
           radius: 13,
@@ -434,61 +586,41 @@ class _CampaignTable extends StatelessWidget {
         const SizedBox(width: 8),
         Text(c.manager),
       ])),
-      // Raw Leads
       DataCell(Text(c.rawLeads)),
-      // Created Date
       DataCell(Text(c.createdDate, style: _inter(13, color: _kTextLight))),
-      // Actions
-      DataCell(_ActionButtons(campaign: c, onEdit: onEdit)),
+      // Dummy action buttons (no-op)
+      DataCell(Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _IconBtn(
+              icon: Icons.edit_outlined,
+              tooltip: 'Edit',
+              color: _kBlue,
+              onTap: () {}),
+          const SizedBox(width: 4),
+          _IconBtn(
+              icon: Icons.settings_outlined,
+              tooltip: 'Settings',
+              color: _kTextLight,
+              onTap: () {}),
+          const SizedBox(width: 4),
+          _IconBtn(
+            icon: isActive
+                ? Icons.pause_circle_outline
+                : Icons.play_circle_outline,
+            tooltip: isActive ? 'Pause' : 'Resume',
+            color: isActive ? const Color(0xFFFA7B17) : _kGreen,
+            onTap: () {},
+          ),
+        ],
+      )),
     ]);
   }
 }
 
 // ─────────────────────────────────────────────
-//  Action Buttons (Edit / Settings / Pause|Resume)
+//  Shared icon button
 // ─────────────────────────────────────────────
-class _ActionButtons extends StatelessWidget {
-  const _ActionButtons({required this.campaign, required this.onEdit});
-
-  final _Campaign campaign;
-  final ValueChanged<_Campaign> onEdit;
-
-  @override
-  Widget build(BuildContext context) {
-    final isPaused = campaign.status == 'Paused';
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Edit
-        _IconBtn(
-          icon: Icons.edit_outlined,
-          tooltip: 'Edit',
-          color: _kBlue,
-          onTap: () => onEdit(campaign),
-        ),
-        const SizedBox(width: 4),
-        // Settings
-        _IconBtn(
-          icon: Icons.settings_outlined,
-          tooltip: 'Settings',
-          color: _kTextLight,
-          onTap: () {},
-        ),
-        const SizedBox(width: 4),
-        // Pause / Resume
-        _IconBtn(
-          icon: isPaused
-              ? Icons.play_circle_outline
-              : Icons.pause_circle_outline,
-          tooltip: isPaused ? 'Resume' : 'Pause',
-          color: isPaused ? _kGreen : const Color(0xFFFA7B17),
-          onTap: () {},
-        ),
-      ],
-    );
-  }
-}
-
 class _IconBtn extends StatefulWidget {
   const _IconBtn({
     required this.icon,
@@ -536,235 +668,8 @@ class _IconBtnState extends State<_IconBtn> {
 }
 
 // ─────────────────────────────────────────────
-//  Slide Panel (Create / Edit)
-// ─────────────────────────────────────────────
-class _SlidePanel extends StatelessWidget {
-  _SlidePanel({
-    required this.isEditMode,
-    required this.nameCtrl,
-    required this.descCtrl,
-    required this.selectedManager,
-    required this.selectedStatus,
-    required this.onManagerChanged,
-    required this.onStatusChanged,
-    required this.onClose,
-    required this.onCancel,
-    required this.onSave,
-    required this.onOpenFormBuilder,
-    required this.onOpenDisposition,
-  });
-
-  final bool isEditMode;
-  final TextEditingController nameCtrl;
-  final TextEditingController descCtrl;
-  final String selectedManager;
-  final String selectedStatus;
-  final ValueChanged<String?> onManagerChanged;
-  final ValueChanged<String?> onStatusChanged;
-  final VoidCallback onClose;
-  final VoidCallback onCancel;
-  final VoidCallback onSave;
-  final VoidCallback onOpenFormBuilder;
-  final VoidCallback onOpenDisposition;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 420,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x20000000),
-            blurRadius: 24,
-            offset: Offset(-4, 0),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Panel header ──────────────────────
-          Container(
-            padding: const EdgeInsets.fromLTRB(24, 20, 16, 20),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: _kBorder)),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  isEditMode ? 'Edit Campaign' : 'Create Campaign',
-                  style: _inter(17, weight: FontWeight.w600),
-                ),
-                const Spacer(),
-                InkWell(
-                  onTap: onClose,
-                  borderRadius: BorderRadius.circular(20),
-                  child: Padding(
-                    padding: const EdgeInsets.all(6),
-                    child: Icon(Icons.close, size: 20, color: _kTextLight),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ── Form ─────────────────────────────
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Campaign Name
-                  _FieldLabel('Campaign Name'),
-                  const SizedBox(height: 6),
-                  _OutlinedField(
-                    controller: nameCtrl,
-                    hint: 'Enter campaign name',
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Select Manager
-                  _FieldLabel('Select Manager'),
-                  const SizedBox(height: 6),
-                  _StyledDropdown<String>(
-                    value: selectedManager,
-                    items: _kManagers,
-                    onChanged: onManagerChanged,
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Status
-                  _FieldLabel('Status'),
-                  const SizedBox(height: 6),
-                  _StyledDropdown<String>(
-                    value: selectedStatus,
-                    items: _kStatuses,
-                    onChanged: onStatusChanged,
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Description
-                  _FieldLabel('Description'),
-                  const SizedBox(height: 6),
-                  _OutlinedField(
-                    controller: descCtrl,
-                    hint: 'Enter campaign description...',
-                    maxLines: 4,
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // ── Edit-mode quick actions ───────────
-          if (isEditMode) ...[
-            const SizedBox(height: 16),
-            const Divider(color: _kBorder, height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Open Form Builder — solid blue filled
-                  SizedBox(
-                    height: 48,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _kBlue,
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                        alignment: Alignment.centerLeft,
-                      ),
-                      onPressed: onOpenFormBuilder,
-                      icon: const Icon(Icons.dynamic_form_outlined,
-                          size: 17, color: Colors.white),
-                      label: Text('Open Form Builder',
-                          style: _inter(13,
-                              weight: FontWeight.w500, color: Colors.white)),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Disposition Settings — white bg, grey border
-                  SizedBox(
-                    height: 48,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: _kTextLight,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          side: const BorderSide(color: _kBorder),
-                        ),
-                        alignment: Alignment.centerLeft,
-                      ),
-                      onPressed: onOpenDisposition,
-                      icon: const Icon(Icons.tune, size: 17, color: _kTextLight),
-                      label: Text('Disposition Settings',
-                          style: _inter(13,
-                              weight: FontWeight.w500, color: _kTextLight)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          // ── Footer buttons ────────────────────
-          Container(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: _kBorder)),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _kTextLight,
-                      side: const BorderSide(color: _kBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: onCancel,
-                    child: Text('Cancel',
-                        style: _inter(13, weight: FontWeight.w500,
-                            color: _kTextLight)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _kBlue,
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: onSave,
-                    child: Text('Save Campaign',
-                        style: _inter(13,
-                            weight: FontWeight.w600, color: Colors.white)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-//  Small form helpers
+//  Small form helpers (kept for potential future
+//  use of the slide panel)
 // ─────────────────────────────────────────────
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.label);
