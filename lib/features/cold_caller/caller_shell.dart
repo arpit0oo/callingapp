@@ -46,6 +46,7 @@ class CallerShellState extends State<CallerShell> {
       'status': 'idle',
       'currentLeadId': '',
       'lastSeen': ServerValue.timestamp,
+      'shiftStarted': ServerValue.timestamp,
     });
   }
 

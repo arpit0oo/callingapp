@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/app_session.dart';
 import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
+import '../../shared/widgets/recent_call_row.dart';
 import '../auth/login_screen.dart';
 import 'caller_shell.dart';
 
@@ -31,6 +34,56 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   static const _textPrimary = Color(0xFF202124);
   static const _textSecondary = Color(0xFF5F6368);
   static const _textHint = Color(0xFF9AA0A6);
+
+  // ── Shift timer ───────────────────────────────────────────────
+  Timer? _shiftTimer;
+  String _shiftDuration = '';
+
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
+  }
+
+  Future<void> _initShiftTimer() async {
+    try {
+      final ref = FirebaseDatabase.instance
+          .ref('caller_state/${AppSession.tenantId}/${AppSession.userId}');
+      final snap = await ref.get();
+      if (!mounted) return;
+      final data = snap.value as Map<dynamic, dynamic>?;
+      final startedMs = data?['shiftStarted'] as int?;
+      if (startedMs != null) {
+        final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
+        setState(() {
+          _shiftDuration = _formatDuration(DateTime.now().difference(started));
+        });
+        _shiftTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+          if (mounted) {
+            setState(() {
+              _shiftDuration =
+                  _formatDuration(DateTime.now().difference(started));
+            });
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('ShiftTimer error: $e');
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _initShiftTimer();
+  }
+
+  @override
+  void dispose() {
+    _shiftTimer?.cancel();
+    super.dispose();
+  }
 
   // ── End Shift ─────────────────────────────────────────────────
 
@@ -179,7 +232,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Shift Active — 3h 42m',
+                  'Shift Active${_shiftDuration.isNotEmpty ? ' — $_shiftDuration' : ''}',
                   style: GoogleFonts.inter(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -381,13 +434,55 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
                   final phone = data['phone']?.toString() ?? '—';
                   final disposition =
                       data['dispositionLabel']?.toString() ?? '—';
-                  return _CallLogRow(
-                    log: _CallLog(
-                      time: '',
+
+                  // Format updatedAt as HH:mm
+                  String time = '';
+                  final updatedAt = data['updatedAt'];
+                  if (updatedAt != null) {
+                    DateTime? dt;
+                    if (updatedAt is Timestamp) {
+                      dt = updatedAt.toDate();
+                    } else if (updatedAt is int) {
+                      dt = DateTime.fromMillisecondsSinceEpoch(updatedAt);
+                    }
+                    if (dt != null) {
+                      time =
+                          '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                    }
+                  }
+
+                  // Chip colors by disposition
+                  final Color chipBg;
+                  final Color chipFg;
+                  final dl = disposition.toLowerCase();
+                  if (dl == 'interested') {
+                    chipBg = const Color(0xFFE6F4EA);
+                    chipFg = const Color(0xFF137333);
+                  } else if (dl == 'wtl' || dl == 'cbl') {
+                    chipBg = const Color(0xFFE8F0FE);
+                    chipFg = const Color(0xFF1A73E8);
+                  } else if (dl == 'dnc') {
+                    chipBg = const Color(0xFFFCE8E6);
+                    chipFg = const Color(0xFFD93025);
+                  } else if (dl == 'no answer' ||
+                      dl == 'busy' ||
+                      dl == 'switched off' ||
+                      dl == 'invalid no.') {
+                    chipBg = const Color(0xFFF1F3F4);
+                    chipFg = const Color(0xFF5F6368);
+                  } else {
+                    chipBg = const Color(0xFFFEF3E2);
+                    chipFg = const Color(0xFFE37400);
+                  }
+
+                  return RecentCallRow(
+                    call: CallData(
+                      time: time,
                       number: phone,
                       disposition: disposition,
-                      chipColor: const Color(0xFFF1F3F4),
-                      textColor: const Color(0xFF5F6368),
+                      chipBg: chipBg,
+                      chipFg: chipFg,
+                      duration: '',
                     ),
                   );
                 }).toList(),
@@ -598,107 +693,3 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Call log data model
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _CallLog {
-  const _CallLog({
-    required this.time,
-    required this.number,
-    required this.disposition,
-    required this.chipColor,
-    required this.textColor,
-  });
-
-  final String time;
-  final String number;
-  final String disposition;
-  final Color chipColor;
-  final Color textColor;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Call log row widget
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _CallLogRow extends StatelessWidget {
-  const _CallLogRow({required this.log});
-  final _CallLog log;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          // Time
-          SizedBox(
-            width: 42,
-            child: Text(
-              log.time,
-              style: GoogleFonts.inter(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: const Color(0xFF9AA0A6),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-
-          // Divider dot
-          Container(
-            width: 4,
-            height: 4,
-            decoration: const BoxDecoration(
-              color: Color(0xFFE8EAED),
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 10),
-
-          // Phone number
-          Expanded(
-            child: Text(
-              log.number,
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: const Color(0xFF202124),
-              ),
-            ),
-          ),
-
-          // Disposition chip
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: log.chipColor,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              log.disposition,
-              style: GoogleFonts.inter(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: log.textColor,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}

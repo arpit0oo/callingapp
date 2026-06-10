@@ -1,5 +1,14 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import '../../services/app_session.dart';
+import '../../services/rtdb_service.dart';
+import '../../shared/widgets/recent_call_row.dart';
+import '../auth/login_screen.dart';
 
 /// Performance screen — shared by Cold Caller (role="cold") and Warm Caller (role="warm").
 class PerformanceContent extends StatefulWidget {
@@ -24,56 +33,295 @@ class _PerformanceContentState extends State<PerformanceContent> {
   final _periods = ['Today', 'This Week', 'This Month'];
   String _selectedPeriod = 'Today';
 
-  // ── KPI data ──────────────────────────────────────────────────
-  static const _coldKpis = [
-    _KpiData(label: 'Calls Made',      value: '45',    icon: Icons.call_outlined,         iconColor: Color(0xFF1A73E8)),
-    _KpiData(label: 'Leads Generated', value: '8',     icon: Icons.person_add_outlined,   iconColor: Color(0xFF34A853)),
-    _KpiData(label: 'Callbacks',       value: '3',     icon: Icons.event_outlined,        iconColor: Color(0xFFFBBC04)),
-    _KpiData(label: 'Avg Handle Time', value: '4m 20s',icon: Icons.timer_outlined,        iconColor: Color(0xFF9334E6)),
-    _KpiData(label: 'Talk Time',       value: '2h 15m',icon: Icons.headset_mic_outlined,  iconColor: Color(0xFF1A73E8)),
-    _KpiData(label: 'Conversion Rate', value: '17.8%', icon: Icons.trending_up_outlined,  iconColor: Color(0xFF34A853)),
-  ];
+  // ── Loading / data state ──────────────────────────────────────
+  bool _loading = true;
 
-  static const _warmKpis = [
-    _KpiData(label: 'Callbacks Made',  value: '28',    icon: Icons.call_outlined,         iconColor: Color(0xFF7B61FF)),
-    _KpiData(label: 'Converted',       value: '11',    icon: Icons.person_add_outlined,   iconColor: Color(0xFF34A853)),
-    _KpiData(label: 'Rescheduled',     value: '5',     icon: Icons.event_outlined,        iconColor: Color(0xFF1A73E8)),
-    _KpiData(label: 'Avg Handle Time', value: '5m 10s',icon: Icons.timer_outlined,        iconColor: Color(0xFF9334E6)),
-    _KpiData(label: 'Talk Time',       value: '2h 48m',icon: Icons.headset_mic_outlined,  iconColor: Color(0xFF7B61FF)),
-    _KpiData(label: 'Conversion Rate', value: '39.3%', icon: Icons.trending_up_outlined,  iconColor: Color(0xFF34A853)),
-  ];
+  // Computed KPIs
+  List<_KpiData> _kpis = [];
 
-  List<_KpiData> get _kpis =>
-      widget.role == 'warm' ? _warmKpis : _coldKpis;
+  // Computed disposition breakdown
+  List<_DispoData> _dispos = [];
 
-  // ── Disposition breakdown ─────────────────────────────────────
-  static const _coldDispos = [
-    _DispoData(label: 'Interested', count: 8,  color: Color(0xFF34A853)),
-    _DispoData(label: 'No Answer',  count: 18, color: Color(0xFF9AA0A6)),
-    _DispoData(label: 'WTL',        count: 6,  color: Color(0xFF1A73E8)),
-    _DispoData(label: 'Busy',       count: 7,  color: Color(0xFFE37400)),
-    _DispoData(label: 'No Need',    count: 4,  color: Color(0xFF9AA0A6)),
-    _DispoData(label: 'DNC',        count: 2,  color: Color(0xFFD93025)),
-  ];
+  // Recent calls (last 5)
+  List<CallData> _recentCalls = [];
 
-  static const _warmDispos = [
-    _DispoData(label: 'Interested',     count: 11, color: Color(0xFF34A853)),
-    _DispoData(label: 'Not Interested', count: 8,  color: Color(0xFF9AA0A6)),
-    _DispoData(label: 'Reschedule',     count: 5,  color: Color(0xFF1A73E8)),
-    _DispoData(label: 'DNC',            count: 4,  color: Color(0xFFD93025)),
-  ];
+  // ── Shift timer ───────────────────────────────────────────────
+  Timer? _shiftTimer;
+  String _shiftDuration = '';
+  String _shiftStartLabel = '';
 
-  List<_DispoData> get _dispos =>
-      widget.role == 'warm' ? _warmDispos : _coldDispos;
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
+  }
 
-  // ── Recent calls ──────────────────────────────────────────────
-  static const _recentCalls = [
-    _CallData(time: '10:08', number: '+91 65432 10987', disposition: 'Busy',       chipBg: Color(0xFFFEF3E2), chipFg: Color(0xFFE37400), duration: '1m 02s'),
-    _CallData(time: '09:51', number: '+91 76543 21098', disposition: 'WTL',        chipBg: Color(0xFFE8F0FE), chipFg: Color(0xFF1A73E8), duration: '6m 14s'),
-    _CallData(time: '09:32', number: '+91 87654 32109', disposition: 'No Answer',  chipBg: Color(0xFFF1F3F4), chipFg: Color(0xFF5F6368), duration: '0m 28s'),
-    _CallData(time: '09:14', number: '+91 98765 43210', disposition: 'Interested', chipBg: Color(0xFFE6F4EA), chipFg: Color(0xFF137333), duration: '5m 47s'),
-    _CallData(time: '09:02', number: '+91 54321 09876', disposition: 'DNC',        chipBg: Color(0xFFFCE8E6), chipFg: Color(0xFFD93025), duration: '2m 10s'),
-  ];
+  Future<void> _initShiftTimer() async {
+    try {
+      final ref = FirebaseDatabase.instance
+          .ref('caller_state/${AppSession.tenantId}/${AppSession.userId}');
+      final snap = await ref.get();
+      if (!mounted) return;
+      final data = snap.value as Map<dynamic, dynamic>?;
+      final startedMs = data?['shiftStarted'] as int?;
+      if (startedMs != null) {
+        final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
+        final hour = started.hour;
+        final minute = started.minute.toString().padLeft(2, '0');
+        final period = hour >= 12 ? 'PM' : 'AM';
+        final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+        setState(() {
+          _shiftStartLabel = 'Started at $displayHour:$minute $period';
+          _shiftDuration = _formatDuration(DateTime.now().difference(started));
+        });
+        _shiftTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+          if (mounted) {
+            setState(() {
+              _shiftDuration =
+                  _formatDuration(DateTime.now().difference(started));
+            });
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('ShiftTimer error: $e');
+    }
+  }
+
+  // ── End Shift ─────────────────────────────────────────────────
+
+  Future<void> _handleEndShift() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'End Shift?',
+          style: GoogleFonts.inter(
+            fontWeight: FontWeight.w700,
+            fontSize: 17,
+            color: const Color(0xFF202124),
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to end your shift?',
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            color: const Color(0xFF5F6368),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF5F6368),
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'End Shift',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFFD93025),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    await RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'offline',
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
+
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
+
+  // ── Data loading ──────────────────────────────────────────────
+
+  /// Returns the DateTime range [from, to] for the selected period.
+  (DateTime from, DateTime to) _getPeriodRange() {
+    final now = DateTime.now();
+    switch (_selectedPeriod) {
+      case 'This Week':
+        return (now.subtract(const Duration(days: 7)), now);
+      case 'This Month':
+        return (now.subtract(const Duration(days: 30)), now);
+      case 'Today':
+      default:
+        final todayStart = DateTime(now.year, now.month, now.day);
+        return (todayStart, now);
+    }
+  }
+
+  Color _dispoColor(String label) {
+    final dl = label.toLowerCase();
+    if (dl == 'interested') return const Color(0xFF34A853);
+    if (dl == 'wtl' || dl == 'cbl') return const Color(0xFF1A73E8);
+    if (dl == 'dnc') return const Color(0xFFD93025);
+    return const Color(0xFF9AA0A6);
+  }
+
+  (Color, Color) _chipColors(String label) {
+    final dl = label.toLowerCase();
+    if (dl == 'interested') {
+      return (const Color(0xFFE6F4EA), const Color(0xFF137333));
+    } else if (dl == 'wtl' || dl == 'cbl') {
+      return (const Color(0xFFE8F0FE), const Color(0xFF1A73E8));
+    } else if (dl == 'dnc') {
+      return (const Color(0xFFFCE8E6), const Color(0xFFD93025));
+    } else {
+      return (const Color(0xFFF1F3F4), const Color(0xFF5F6368));
+    }
+  }
+
+  Future<void> _loadStats() async {
+    setState(() => _loading = true);
+
+    try {
+      final (from, to) = _getPeriodRange();
+
+      // Query disposed leads for this user within the period
+      final snapshot = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('leads')
+          .where('assignedTo', isEqualTo: AppSession.userId)
+          .where('status', isEqualTo: 'disposed')
+          .where('updatedAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+          .where('updatedAt', isLessThanOrEqualTo: Timestamp.fromDate(to))
+          .orderBy('updatedAt', descending: true)
+          .get();
+
+      final docs = snapshot.docs;
+
+      // ── Compute stats ────────────────────────────────────────
+      final callsMade = docs.length;
+      int leadsGenerated = 0;
+      int callbacks = 0;
+      final Map<String, int> dispoBreakdown = {};
+
+      for (final doc in docs) {
+        final data = doc.data();
+        final label = (data['dispositionLabel'] as String? ?? '').trim();
+        if (label.isEmpty) continue;
+
+        // Count by disposition
+        dispoBreakdown[label] = (dispoBreakdown[label] ?? 0) + 1;
+
+        final dl = label.toLowerCase();
+        if (dl == 'interested') leadsGenerated++;
+        if (dl == 'wtl' || dl == 'cbl') callbacks++;
+      }
+
+      // ── Build KPI list ───────────────────────────────────────
+      final List<_KpiData> kpis;
+      if (widget.role == 'warm') {
+        kpis = [
+          _KpiData(label: 'Callbacks Made',  value: callsMade.toString(),       icon: Icons.call_outlined,         iconColor: const Color(0xFF7B61FF)),
+          _KpiData(label: 'Converted',       value: leadsGenerated.toString(),  icon: Icons.person_add_outlined,   iconColor: const Color(0xFF34A853)),
+          _KpiData(label: 'Rescheduled',     value: callbacks.toString(),       icon: Icons.event_outlined,        iconColor: const Color(0xFF1A73E8)),
+          _KpiData(label: 'Avg Handle Time', value: '—',                        icon: Icons.timer_outlined,        iconColor: const Color(0xFF9334E6)),
+          _KpiData(label: 'Talk Time',       value: '—',                        icon: Icons.headset_mic_outlined,  iconColor: const Color(0xFF7B61FF)),
+          _KpiData(label: 'Conversion Rate', value: '—',                        icon: Icons.trending_up_outlined,  iconColor: const Color(0xFF34A853)),
+        ];
+      } else {
+        kpis = [
+          _KpiData(label: 'Calls Made',      value: callsMade.toString(),       icon: Icons.call_outlined,         iconColor: const Color(0xFF1A73E8)),
+          _KpiData(label: 'Leads Generated', value: leadsGenerated.toString(),  icon: Icons.person_add_outlined,   iconColor: const Color(0xFF34A853)),
+          _KpiData(label: 'Callbacks',       value: callbacks.toString(),       icon: Icons.event_outlined,        iconColor: const Color(0xFFFBBC04)),
+          _KpiData(label: 'Avg Handle Time', value: '—',                        icon: Icons.timer_outlined,        iconColor: const Color(0xFF9334E6)),
+          _KpiData(label: 'Talk Time',       value: '—',                        icon: Icons.headset_mic_outlined,  iconColor: const Color(0xFF1A73E8)),
+          _KpiData(label: 'Conversion Rate', value: '—',                        icon: Icons.trending_up_outlined,  iconColor: const Color(0xFF34A853)),
+        ];
+      }
+
+      // ── Build disposition breakdown ──────────────────────────
+      final dispos = dispoBreakdown.entries
+          .map((e) => _DispoData(
+                label: e.key,
+                count: e.value,
+                color: _dispoColor(e.key),
+              ))
+          .toList()
+        ..sort((a, b) => b.count.compareTo(a.count));
+
+      // ── Build recent calls (top 5 already ordered by updatedAt desc) ─
+      final recentDocs = docs.take(5);
+      final recentCalls = recentDocs.map((doc) {
+        final data = doc.data();
+        final phone = data['phone']?.toString() ?? '—';
+        final disposition = (data['dispositionLabel']?.toString() ?? '—').trim();
+
+        String time = '';
+        final updatedAt = data['updatedAt'];
+        if (updatedAt != null) {
+          DateTime? dt;
+          if (updatedAt is Timestamp) {
+            dt = updatedAt.toDate();
+          } else if (updatedAt is int) {
+            dt = DateTime.fromMillisecondsSinceEpoch(updatedAt);
+          }
+          if (dt != null) {
+            time =
+                '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+          }
+        }
+
+        final (chipBg, chipFg) = _chipColors(disposition);
+
+        return CallData(
+          time: time,
+          number: phone,
+          disposition: disposition,
+          chipBg: chipBg,
+          chipFg: chipFg,
+          duration: '—',
+        );
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _kpis = kpis;
+        _dispos = dispos;
+        _recentCalls = recentCalls;
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('PerformanceContent _loadStats error: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _initShiftTimer();
+    _loadStats();
+  }
+
+  @override
+  void dispose() {
+    _shiftTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -83,21 +331,25 @@ class _PerformanceContentState extends State<PerformanceContent> {
         children: [
           _buildTopBar(),
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildShiftCard(),
-                  const SizedBox(height: 14),
-                  _buildKpiGrid(),
-                  const SizedBox(height: 14),
-                  _buildDispositionCard(),
-                  const SizedBox(height: 14),
-                  _buildRecentCallsCard(),
-                ],
-              ),
-            ),
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildShiftCard(),
+                        const SizedBox(height: 14),
+                        _buildKpiGrid(),
+                        const SizedBox(height: 14),
+                        if (_dispos.isNotEmpty) ...[
+                          _buildDispositionCard(),
+                          const SizedBox(height: 14),
+                        ],
+                        _buildRecentCallsCard(),
+                      ],
+                    ),
+                  ),
           ),
         ],
       ),
@@ -146,7 +398,12 @@ class _PerformanceContentState extends State<PerformanceContent> {
                 items: _periods
                     .map((p) => DropdownMenuItem(value: p, child: Text(p)))
                     .toList(),
-                onChanged: (v) => setState(() => _selectedPeriod = v!),
+                onChanged: (v) {
+                  if (v != null && v != _selectedPeriod) {
+                    setState(() => _selectedPeriod = v);
+                    _loadStats();
+                  }
+                },
               ),
             ),
           ),
@@ -192,15 +449,16 @@ class _PerformanceContentState extends State<PerformanceContent> {
                   color: Colors.white.withOpacity(0.18),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Text('3h 42m',
-                    style: GoogleFonts.inter(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white)),
+                child: Text(
+                  _shiftDuration.isNotEmpty ? _shiftDuration : '—',
+                  style: GoogleFonts.inter(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white)),
               ),
               const Spacer(),
               OutlinedButton(
-                onPressed: () {},
+                onPressed: _handleEndShift,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white,
                   side: const BorderSide(color: Colors.white70, width: 1.2),
@@ -219,10 +477,11 @@ class _PerformanceContentState extends State<PerformanceContent> {
             ],
           ),
           const SizedBox(height: 8),
-          Text('Started at 09:00 AM',
-              style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: Colors.white.withOpacity(0.75))),
+          Text(
+            _shiftStartLabel.isNotEmpty ? _shiftStartLabel : 'Shift start time unavailable',
+            style: GoogleFonts.inter(
+                fontSize: 12,
+                color: Colors.white.withOpacity(0.75))),
         ],
       ),
     );
@@ -270,7 +529,19 @@ class _PerformanceContentState extends State<PerformanceContent> {
         children: [
           _SectionTitle('Recent Calls'),
           const SizedBox(height: 12),
-          ..._recentCalls.map((c) => _RecentCallRow(call: c)),
+          if (_recentCalls.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'No recent calls for this period.',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: _textSecondary,
+                ),
+              ),
+            )
+          else
+            ..._recentCalls.map((c) => RecentCallRow(call: c)),
         ],
       ),
     );
@@ -396,64 +667,6 @@ class _DispositionRow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Recent call row
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _RecentCallRow extends StatelessWidget {
-  const _RecentCallRow({required this.call});
-  final _CallData call;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 9),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8F9FA),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          // Time
-          Text(call.time,
-              style: GoogleFonts.inter(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: const Color(0xFF9AA0A6))),
-          const SizedBox(width: 10),
-          // Phone
-          Expanded(
-            child: Text(call.number,
-                style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF202124))),
-          ),
-          // Duration
-          Text(call.duration,
-              style: GoogleFonts.inter(
-                  fontSize: 11, color: const Color(0xFF9AA0A6))),
-          const SizedBox(width: 8),
-          // Chip
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: call.chipBg,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(call.disposition,
-                style: GoogleFonts.inter(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: call.chipFg)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Shared widgets
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -517,21 +730,4 @@ class _DispoData {
   final String label;
   final int count;
   final Color color;
-}
-
-class _CallData {
-  const _CallData({
-    required this.time,
-    required this.number,
-    required this.disposition,
-    required this.chipBg,
-    required this.chipFg,
-    required this.duration,
-  });
-  final String time;
-  final String number;
-  final String disposition;
-  final Color chipBg;
-  final Color chipFg;
-  final String duration;
 }
