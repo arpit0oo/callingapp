@@ -63,9 +63,15 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
 
   // ── Disposition state ─────────────────────────────────────────
   String? _selectedDisposition;
+  /// True when the selected disposition's requiresNote == true.
+  bool _selectedDispositionRequiresNote = false;
+  /// True when the selected disposition's requiresCallback == true.
+  bool _selectedDispositionRequiresCallback = false;
   String? _cbDate;
   String? _cbTime;
   bool _showSuccess = false;
+  /// Drives a red border on the notes card after a failed submit.
+  bool _notesError = false;
 
   final _callbackDates = ['Today', 'Tomorrow', 'In 2 days', 'In 3 days'];
   final _callbackTimes = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM', '06:00 PM'];
@@ -122,11 +128,6 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     return '$m:$s';
   }
 
-  bool get _needsCallback =>
-      _selectedDisposition == 'WTL' ||
-      _selectedDisposition == 'CBL' ||
-      _selectedDisposition == 'Reschedule';
-
   bool get _canSubmit => _selectedDisposition != null;
 
   // ── Helpers ───────────────────────────────────────────────────
@@ -158,6 +159,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       _invalidFieldIds.clear();
       _notesCtrl.clear();
       _selectedDisposition = null;
+      _selectedDispositionRequiresNote = false;
+      _selectedDispositionRequiresCallback = false;
+      _notesError = false;
       _cbDate = null;
       _cbTime = null;
       _seconds = 0;
@@ -191,7 +195,25 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       return; // abort — button stays enabled
     }
 
+    // ── Notes validation ───────────────────────────────────────
+    if (_selectedDispositionRequiresNote &&
+        _notesCtrl.text.trim().isEmpty) {
+      setState(() => _notesError = true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This disposition requires a note'),
+            backgroundColor: Color(0xFFD93025),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
     // Clear any previous error highlights before submitting
+    if (_notesError) setState(() => _notesError = false);
     if (_invalidFieldIds.isNotEmpty) {
       setState(() => _invalidFieldIds.clear());
     }
@@ -473,10 +495,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     ? rawOpts.map((e) => e.toString()).toList()
                     : <String>[];
 
-                // Register required fields so _submit() can validate them.
-                if (isRequired) _requiredFields.add(id);
+                // Register required fields by label so _submit() can look up
+                // values via _formData[label].
+                if (isRequired) _requiredFields.add(label);
 
-                final hasError = _invalidFieldIds.contains(id);
+                final hasError = _invalidFieldIds.contains(label);
                 Widget fieldWidget;
 
                 final typeLower = type.toLowerCase();
@@ -491,9 +514,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     keyboardType: TextInputType.text,
                     hasError: hasError,
                     onChanged: (v) {
-                      _formData[id] = v;
+                      _formData[label] = v;
                       if (hasError && v.trim().isNotEmpty) {
-                        setState(() => _invalidFieldIds.remove(id));
+                        setState(() => _invalidFieldIds.remove(label));
                       }
                     },
                   );
@@ -508,14 +531,14 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     hasError: hasError,
                     onChanged: (v) {
-                      _formData[id] = v;
+                      _formData[label] = v;
                       if (hasError && v.trim().isNotEmpty) {
-                        setState(() => _invalidFieldIds.remove(id));
+                        setState(() => _invalidFieldIds.remove(label));
                       }
                     },
                   );
                 } else if (typeLower == 'date') {
-                  final selected = _formData[id]?.toString();
+                  final selected = _formData[label]?.toString();
                   fieldWidget = GestureDetector(
                     onTap: () async {
                       final now = DateTime.now();
@@ -540,8 +563,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                           '${pickedDate.day.toString().padLeft(2, '0')} '
                           '$timeStr';
                       setState(() {
-                        _formData[id] = combined;
-                        _invalidFieldIds.remove(id);
+                        _formData[label] = combined;
+                        _invalidFieldIds.remove(label);
                       });
                     },
                     child: Container(
@@ -586,13 +609,13 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                   );
                 } else if (typeLower == 'dropdown') {
                   fieldWidget = _CompactDropdown(
-                    value: _formData[id]?.toString(),
+                    value: _formData[label]?.toString(),
                     hint: 'Select $label',
                     items: options,
                     hasError: hasError,
                     onChanged: (v) => setState(() {
-                      _formData[id] = v;
-                      _invalidFieldIds.remove(id);
+                      _formData[label] = v;
+                      _invalidFieldIds.remove(label);
                     }),
                   );
                 } else if (typeLower == 'radio' || typeLower == 'radio button' || typeLower == 'chips') {
@@ -611,11 +634,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                       spacing: 6,
                       runSpacing: 6,
                       children: options.map((opt) {
-                        final sel = _formData[id] == opt;
+                        final sel = _formData[label] == opt;
                         return GestureDetector(
                           onTap: () => setState(() {
-                            _formData[id] = opt;
-                            _invalidFieldIds.remove(id);
+                            _formData[label] = opt;
+                            _invalidFieldIds.remove(label);
                           }),
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 120),
@@ -647,7 +670,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                   );
                 } else if (typeLower == 'checkbox') {
                   // Parse currently selected values from the comma-separated string.
-                  final rawVal = _formData[id]?.toString() ?? '';
+                  final rawVal = _formData[label]?.toString() ?? '';
                   final selected = rawVal.isEmpty
                       ? <String>{}
                       : rawVal.split(',').map((s) => s.trim()).toSet();
@@ -676,9 +699,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                             } else {
                               next.add(opt);
                             }
-                            _formData[id] = next.join(', ');
+                            _formData[label] = next.join(', ');
                             if (next.isNotEmpty) {
-                              _invalidFieldIds.remove(id);
+                              _invalidFieldIds.remove(label);
                             }
                           }),
                           child: Padding(
@@ -701,9 +724,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                                       } else {
                                         next.add(opt);
                                       }
-                                      _formData[id] = next.join(', ');
+                                      _formData[label] = next.join(', ');
                                       if (next.isNotEmpty) {
-                                        _invalidFieldIds.remove(id);
+                                        _invalidFieldIds.remove(label);
                                       }
                                     }),
                                   ),
@@ -734,9 +757,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     hint: 'Enter $label',
                     hasError: hasError,
                     onChanged: (v) {
-                      _formData[id] = v;
+                      _formData[label] = v;
                       if (hasError && v.trim().isNotEmpty) {
-                        setState(() => _invalidFieldIds.remove(id));
+                        setState(() => _invalidFieldIds.remove(label));
                       }
                     },
                   );
@@ -781,20 +804,49 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SectionTitle('Add Notes'),
+          Row(
+            children: [
+              _SectionTitle('Add Notes'),
+              if (_selectedDispositionRequiresNote) ...[
+                const SizedBox(width: 4),
+                const Text('*',
+                    style: TextStyle(
+                        color: Color(0xFFD93025),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ],
+            ],
+          ),
           const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
-              border: Border.all(color: _border),
+              border: Border.all(
+                color: _notesError
+                    ? const Color(0xFFD93025)
+                    : _border,
+                width: _notesError ? 1.5 : 1.0,
+              ),
               borderRadius: BorderRadius.circular(8),
+              color: _notesError ? const Color(0xFFFCE8E6) : null,
             ),
             child: TextField(
               controller: _notesCtrl,
               maxLines: 3,
               style: GoogleFonts.inter(fontSize: 13, color: _textPrimary),
+              onChanged: (_) {
+                if (_notesError && _notesCtrl.text.trim().isNotEmpty) {
+                  setState(() => _notesError = false);
+                }
+              },
               decoration: InputDecoration(
-                hintText: 'Type call notes here...',
-                hintStyle: GoogleFonts.inter(fontSize: 13, color: _textHint),
+                hintText: _selectedDispositionRequiresNote
+                    ? 'Required — type call notes here...'
+                    : 'Type call notes here...',
+                hintStyle: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: _notesError
+                        ? const Color(0xFFD93025)
+                        : _textHint),
                 contentPadding: const EdgeInsets.all(12),
                 border: InputBorder.none,
               ),
@@ -860,10 +912,23 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                   final chipColor = _hexColor(data['color']?.toString());
                   final sel = _selectedDisposition == label;
                   return GestureDetector(
-                    onTap: () => setState(() {
-                      _selectedDisposition = label;
-                      if (!_needsCallback) { _cbDate = null; _cbTime = null; }
-                    }),
+                    onTap: () {
+                      final requiresNote =
+                          data['requiresNote'] as bool? ?? false;
+                      final requiresCallback =
+                          data['requiresCallback'] as bool? ?? false;
+                      setState(() {
+                        _selectedDisposition = label;
+                        _selectedDispositionRequiresNote = requiresNote;
+                        _selectedDispositionRequiresCallback = requiresCallback;
+                        // Clear notes error when disposition changes
+                        _notesError = false;
+                        if (!requiresCallback) {
+                          _cbDate = null;
+                          _cbTime = null;
+                        }
+                      });
+                    },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 130),
                       decoration: BoxDecoration(
@@ -901,8 +966,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
             },
           ),
 
-          // Callback scheduler (WTL / CBL / Reschedule)
-          if (_needsCallback) ...[
+          // Callback scheduler — shown when disposition requiresCallback
+          if (_selectedDispositionRequiresCallback) ...[
             const SizedBox(height: 14),
             Container(
               padding: const EdgeInsets.all(12),
