@@ -55,6 +55,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   final Set<String> _invalidFieldIds = {};
   /// Fetched once in initState — avoids refetching on every timer rebuild.
   Future<QuerySnapshot>? _schemaFuture;
+  /// Disposition chips loaded from Firestore disposition_config sub-collection.
+  Future<QuerySnapshot>? _dispositionFuture;
 
   // ── Notes ─────────────────────────────────────────────────────
   final _notesCtrl = TextEditingController();
@@ -68,27 +70,15 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   final _callbackDates = ['Today', 'Tomorrow', 'In 2 days', 'In 3 days'];
   final _callbackTimes = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM', '06:00 PM'];
 
-  static const _coldDispositions = [
-    _Dispo(label: 'Interested',   color: Color(0xFF34A853), bg: Color(0xFFE6F4EA)),
-    _Dispo(label: 'WTL',         color: Color(0xFF1A73E8), bg: Color(0xFFE8F0FE)),
-    _Dispo(label: 'CBL',         color: Color(0xFF1A73E8), bg: Color(0xFFE8F0FE)),
-    _Dispo(label: 'No Need',     color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
-    _Dispo(label: 'DNC',         color: Color(0xFFD93025), bg: Color(0xFFFCE8E6)),
-    _Dispo(label: 'No Answer',   color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
-    _Dispo(label: 'Busy',        color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
-    _Dispo(label: 'Invalid No.', color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
-    _Dispo(label: 'Switched Off',color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
-  ];
-
-  static const _warmDispositions = [
-    _Dispo(label: 'Interested',    color: Color(0xFF34A853), bg: Color(0xFFE6F4EA)),
-    _Dispo(label: 'Not Interested',color: Color(0xFF5F6368), bg: Color(0xFFF1F3F4)),
-    _Dispo(label: 'Reschedule',    color: Color(0xFF1A73E8), bg: Color(0xFFE8F0FE)),
-    _Dispo(label: 'DNC',           color: Color(0xFFD93025), bg: Color(0xFFFCE8E6)),
-  ];
-
-  List<_Dispo> get _dispositions =>
-      widget.role == 'warm' ? _warmDispositions : _coldDispositions;
+  /// Parses a hex color string (e.g. "#1A73E8" or "1A73E8") into a [Color].
+  /// Returns [_primary] if the string is absent or malformed.
+  static Color _hexColor(String? hex) {
+    if (hex == null || hex.isEmpty) return const Color(0xFF1A73E8);
+    final clean = hex.startsWith('#') ? hex.substring(1) : hex;
+    final padded = clean.length == 6 ? 'FF$clean' : clean;
+    final value = int.tryParse(padded, radix: 16);
+    return value != null ? Color(value) : const Color(0xFF1A73E8);
+  }
 
   @override
   void initState() {
@@ -98,12 +88,19 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     });
     // Load form schema once; FutureBuilder below caches the result.
     if (AppSession.campaignId.isNotEmpty) {
-      _schemaFuture = FirebaseFirestore.instance
+      final campaignRef = FirebaseFirestore.instance
           .collection('tenants')
           .doc(AppSession.tenantId)
           .collection('campaigns')
-          .doc(AppSession.campaignId)
+          .doc(AppSession.campaignId);
+
+      _schemaFuture = campaignRef
           .collection('form_schema')
+          .orderBy('order')
+          .get();
+
+      _dispositionFuture = campaignRef
+          .collection('disposition_config')
           .orderBy('order')
           .get();
     }
@@ -818,58 +815,93 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
           _SectionTitle('Select Disposition'),
           const SizedBox(height: 12),
 
-          // Grid — 3 per row
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _dispositions.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
-              childAspectRatio: 2.6,
-            ),
-            itemBuilder: (_, i) {
-              final d = _dispositions[i];
-              final sel = _selectedDisposition == d.label;
-              return GestureDetector(
-                onTap: () => setState(() {
-                  _selectedDisposition = d.label;
-                  if (!_needsCallback) { _cbDate = null; _cbTime = null; }
-                }),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 130),
-                  decoration: BoxDecoration(
-                    color: sel ? d.color : Colors.white,
-                    border: Border.all(
-                        color: d.color,
-                        width: sel ? 0 : 1.4),
-                    borderRadius: BorderRadius.circular(20),
+          // ── Chip grid — loaded from Firestore ─────────────────
+          FutureBuilder<QuerySnapshot>(
+            future: _dispositionFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ),
-                  alignment: Alignment.center,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (sel) ...[
-                        const Icon(Icons.check, size: 11, color: Colors.white),
-                        const SizedBox(width: 3),
-                      ],
-                      Flexible(
-                        child: Text(d.label,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: sel ? Colors.white : d.color)),
-                      ),
-                    ],
+                );
+              }
+
+              final docs = snapshot.data?.docs ?? [];
+
+              if (docs.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No dispositions configured.',
+                    style: GoogleFonts.inter(
+                        fontSize: 13, color: const Color(0xFF9AA0A6)),
                   ),
+                );
+              }
+
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: docs.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 2.6,
                 ),
+                itemBuilder: (_, i) {
+                  final data = docs[i].data() as Map<String, dynamic>;
+                  final label = data['label']?.toString() ?? docs[i].id;
+                  final chipColor = _hexColor(data['color']?.toString());
+                  final sel = _selectedDisposition == label;
+                  return GestureDetector(
+                    onTap: () => setState(() {
+                      _selectedDisposition = label;
+                      if (!_needsCallback) { _cbDate = null; _cbTime = null; }
+                    }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 130),
+                      decoration: BoxDecoration(
+                        color: sel ? chipColor : Colors.white,
+                        border: Border.all(
+                            color: chipColor,
+                            width: sel ? 0 : 1.4),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (sel) ...[
+                            const Icon(Icons.check, size: 11,
+                                color: Colors.white),
+                            const SizedBox(width: 3),
+                          ],
+                          Flexible(
+                            child: Text(
+                              label,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: sel ? Colors.white : chipColor),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
               );
             },
           ),
 
-          // Callback scheduler (WTL / CBL)
+          // Callback scheduler (WTL / CBL / Reschedule)
           if (_needsCallback) ...[
             const SizedBox(height: 14),
             Container(
@@ -1215,14 +1247,3 @@ class _CompactDropdown extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Disposition data model
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _Dispo {
-  const _Dispo(
-      {required this.label, required this.color, required this.bg});
-  final String label;
-  final Color color;
-  final Color bg;
-}

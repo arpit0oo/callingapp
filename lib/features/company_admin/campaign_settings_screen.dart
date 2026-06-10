@@ -60,17 +60,11 @@ class CampaignSettingsContent extends StatefulWidget {
 }
 
 class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
-  // Dispositions
-  List<_Disposition> _dispositions = [
-    _Disposition(label: 'Interested',      color: _kGreen,  requiresNote: true,  callback: false),
-    _Disposition(label: 'WTL',             color: _kBlue,   requiresNote: true,  callback: true),
-    _Disposition(label: 'CBL',             color: _kBlue,   requiresNote: false, callback: true),
-    _Disposition(label: 'No Need',         color: _kGrey,   requiresNote: false, callback: false),
-    _Disposition(label: 'DNC',             color: _kRed,    requiresNote: false, callback: false),
-    _Disposition(label: 'No Answer',       color: _kOrange, requiresNote: false, callback: false),
-    _Disposition(label: 'Busy',            color: _kOrange, requiresNote: false, callback: false),
-    _Disposition(label: 'Invalid Number',  color: _kGrey,   requiresNote: false, callback: false),
-  ];
+  // Dispositions — populated from Firestore in _loadFromFirestore()
+  List<_Disposition> _dispositions = [];
+
+  // Campaign display name — loaded from Firestore
+  String _campaignName = '';
 
   bool _showAddForm = false;
   final _newLabelCtrl = TextEditingController();
@@ -112,6 +106,9 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
     if (campaignDoc.exists) {
       final d = campaignDoc.data()!;
       setState(() {
+        _campaignName = (d['name'] as String?)?.trim().isNotEmpty == true
+            ? d['name'] as String
+            : campaignId;
         _maxRetries = (d['maxRetries'] as num?)?.toInt() ?? _maxRetries;
         _retryAfter  = (d['retryAfter']  as num?)?.toInt() ?? _retryAfter;
         _dailyLimit  = (d['dailyLimit']  as num?)?.toInt() ?? _dailyLimit;
@@ -227,8 +224,10 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
             ),
             const SizedBox(width: 14),
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Campaign Settings — Xpert Tutor',
-                  style: _inter(20, weight: FontWeight.w700)),
+              Text(
+                'Campaign Settings — ${_campaignName.isNotEmpty ? _campaignName : widget.campaignId}',
+                style: _inter(20, weight: FontWeight.w700),
+              ),
               const SizedBox(height: 3),
               Text('Configure dispositions and integrations',
                   style: _inter(14, color: _kTextLight)),
@@ -264,6 +263,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
               onToggleCallback: (i) =>
                   setState(() => _dispositions[i].callback = !_dispositions[i].callback),
               onDelete: (i) => setState(() => _dispositions.removeAt(i)),
+              onSave: _saveToFirestore,
             )),
             const SizedBox(width: 20),
 
@@ -315,6 +315,7 @@ class _DispositionCard extends StatelessWidget {
     required this.onToggleNote,
     required this.onToggleCallback,
     required this.onDelete,
+    required this.onSave,
   });
 
   final List<_Disposition> dispositions;
@@ -328,6 +329,7 @@ class _DispositionCard extends StatelessWidget {
   final ValueChanged<int> onToggleNote;
   final ValueChanged<int> onToggleCallback;
   final ValueChanged<int> onDelete;
+  final VoidCallback onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -430,7 +432,26 @@ class _DispositionCard extends StatelessWidget {
           ),
         ],
 
-        const SizedBox(height: 8),
+        // Save Changes button
+        const Divider(color: _kBorder, height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _kBlue,
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: onSave,
+              icon: const Icon(Icons.save_outlined, size: 16, color: Colors.white),
+              label: Text('Save Changes',
+                  style: _inter(13, weight: FontWeight.w600, color: Colors.white)),
+            ),
+          ),
+        ),
       ]),
     );
   }
