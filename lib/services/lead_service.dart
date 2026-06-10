@@ -3,212 +3,186 @@ import 'firestore_service.dart';
 
 class LeadService {
 
-  // Get next available lead for caller.
-  // NOTE: No transaction — db.runTransaction() is unreliable on Flutter Web.
-  // A small race condition is accepted here; migrate to a Cloud Function
-  // for atomic locking before production.
+  // ── Get next available lead ────────────────────────────────────────────────
+  //
+  // NOTE: No transaction — a small race condition is accepted here.
+  // Migrate to a Cloud Function for atomic array-pop before production.
+
   static Future<Map<String, dynamic>?> getNextLead(
-      String tenantId, String campaignId, String callerId,
+      String tenantId,
+      String campaignId,
+      String callerId,
       {String role = 'cold_caller'}) async {
 
-    // ── Warm-caller path: pull from callbacks queue ──────────────────────
+    // ── Warm-caller path: pull from warm_numbers buckets ──────────────────
     if (role == 'warm_caller') {
-      final db = FirebaseFirestore.instance;
-      final now = Timestamp.now();
+      // Try callback bucket first, fall back to retry bucket.
+      for (final bucket in ['callback', 'retry']) {
+        final bucketRef =
+            FirestoreService.warmNumbersDoc(tenantId, campaignId, bucket);
+        final snap = await bucketRef.get();
+        final numbers =
+            ((snap.data() as Map<String, dynamic>?)?['numbers'] as List<dynamic>?)
+                ?.cast<String>() ??
+                [];
 
-      // 1. Find the oldest pending callback whose scheduled time has passed.
-      final cbQuery = await db
-          .collection('tenants')
-          .doc(tenantId)
-          .collection('callbacks')
-          .where('status', isEqualTo: 'pending')
-          .where('scheduledAt', isLessThanOrEqualTo: now)
-          .orderBy('scheduledAt')
-          .limit(1)
-          .get();
+        if (numbers.isEmpty) continue;
 
-      if (cbQuery.docs.isEmpty) return null;
+        final phone = numbers.first;
 
-      final cbDoc = cbQuery.docs.first;
+        // Pop the number from the bucket atomically.
+        await bucketRef.update({
+          'numbers': FieldValue.arrayRemove([phone]),
+        });
 
-      // 2. Lock the callback doc.
-      await cbDoc.reference.update({
-        'status': 'locked',
-        'assignedTo': callerId,
-        'lockedAt': FieldValue.serverTimestamp(),
-      });
+        // Fetch or create the lead doc (phone is the document ID).
+        final leadRef =
+            FirestoreService.leadsCol(tenantId, campaignId).doc(phone);
+        final leadSnap = await leadRef.get();
 
-      // 3. Fetch the originating lead.
-      final leadId = cbDoc.data()['leadId'] as String? ?? '';
-      if (leadId.isEmpty) return null;
+        Map<String, dynamic> leadData;
+        if (leadSnap.exists) {
+          leadData = leadSnap.data() as Map<String, dynamic>;
+        } else {
+          leadData = {
+            'phone': phone,
+            'campaignId': campaignId,
+            'status': 'locked',
+            'assignedTo': callerId,
+            'lockedAt': FieldValue.serverTimestamp(),
+            'createdAt': FieldValue.serverTimestamp(),
+          };
+          await leadRef.set(leadData);
+        }
 
-      final leadDoc = await FirestoreService.leadsCol(tenantId).doc(leadId).get();
-      if (!leadDoc.exists) return null;
+        return {'id': phone, ...leadData};
+      }
 
-      // 4. Return lead data merged with the callback document ID.
-      return {
-        'id': leadDoc.id,
-        'callbackId': cbDoc.id,
-        ...leadDoc.data() as Map<String, dynamic>,
-      };
+      return null; // Both buckets empty.
     }
 
-    // ── Cold-caller path: raw leads queue (unchanged) ─────────────────────
-    // 1. Query the first raw lead for this campaign, oldest first.
-    final query = await FirestoreService.leadsCol(tenantId)
-        .where('campaignId', isEqualTo: campaignId)
-        .where('status', isEqualTo: 'raw')
-        .orderBy('createdAt')
-        .limit(1)
-        .get();
+    // ── Cold-caller path: pull from raw_numbers/unfiltered ────────────────
+    final rawRef =
+        FirestoreService.rawNumbersDoc(tenantId, campaignId, 'unfiltered');
+    final rawSnap = await rawRef.get();
+    final numbers =
+        ((rawSnap.data() as Map<String, dynamic>?)?['numbers'] as List<dynamic>?)
+            ?.cast<String>() ??
+            [];
 
-    if (query.docs.isEmpty) return null;
+    if (numbers.isEmpty) return null;
 
-    final leadDoc = query.docs.first;
+    final phone = numbers.first;
 
-    // 2. Immediately lock it with a simple update (no transaction).
-    await leadDoc.reference.update({
+    // Pop the number from the bucket atomically.
+    await rawRef.update({
+      'numbers': FieldValue.arrayRemove([phone]),
+    });
+
+    // Create / update the lead doc under the campaign.
+    final leadRef =
+        FirestoreService.leadsCol(tenantId, campaignId).doc(phone);
+    await leadRef.set({
+      'phone': phone,
+      'campaignId': campaignId,
       'status': 'locked',
       'assignedTo': callerId,
       'lockedAt': FieldValue.serverTimestamp(),
-    });
+      'attempts': FieldValue.increment(1),
+    }, SetOptions(merge: true));
 
-    // 3. Return the lead data with its document ID included.
-    return {'id': leadDoc.id, ...leadDoc.data() as Map<String, dynamic>};
+    return {'id': phone, 'phone': phone};
   }
 
-  // Submit disposition after call
+  // ── Submit disposition after call ─────────────────────────────────────────
+
   static Future<void> submitDisposition(
       String tenantId,
-      String leadId,
+      String campaignId,
+      String phone,
       Map<String, dynamic> data,
       String dispositionType,
       Map<String, dynamic> extraData) async {
     final db = FirebaseFirestore.instance;
-    final leadRef = FirestoreService.leadsCol(tenantId).doc(leadId);
 
-    if (dispositionType == 'retry') {
-      // ── Retry: reset lead to raw with a future retryAfter timestamp ──────
-      final minutes = (extraData['retryMinutes'] as num?)?.toInt() ?? 30;
-      await leadRef.update({
-        ...data,
-        'status': 'raw',
-        'assignedTo': '',
-        'retryAfter': Timestamp.fromDate(
-            DateTime.now().add(Duration(minutes: minutes))),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      return;
-    }
-
-    // For all other types: mark lead as disposed first.
-    await leadRef.update({
+    // Always mark lead as disposed.
+    await FirestoreService.leadsCol(tenantId, campaignId).doc(phone).update({
       ...data,
       'status': 'disposed',
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
     if (dispositionType == 'callback') {
-      // ── Callback: schedule a new callback doc ─────────────────────────────
-      await db
-          .collection('tenants')
-          .doc(tenantId)
-          .collection('callbacks')
-          .add({
-        'leadId': leadId,
-        'phone': extraData['phone'] ?? '',
-        'campaignId': extraData['campaignId'] ?? '',
-        'scheduledAt': extraData['scheduledAt'],
-        'status': 'pending',
-        'assignedTo': '',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      // ── Queue for warm caller follow-up ──────────────────────────────────
+      await FirestoreService.warmNumbersDoc(tenantId, campaignId, 'callback')
+          .set({'numbers': FieldValue.arrayUnion([phone])},
+              SetOptions(merge: true));
+
+    } else if (dispositionType == 'retry') {
+      // ── Re-queue for cold caller ──────────────────────────────────────────
+      await FirestoreService.rawNumbersDoc(tenantId, campaignId, 'unfiltered')
+          .set({'numbers': FieldValue.arrayUnion([phone])},
+              SetOptions(merge: true));
+
     } else if (dispositionType == 'dnc') {
-      // ── DNC: write to suppression list keyed by phone number ──────────────
-      final phone = extraData['phone'] as String? ?? '';
-      if (phone.isNotEmpty) {
-        await db
-            .collection('tenants')
-            .doc(tenantId)
-            .collection('suppression_list')
-            .doc(phone)
-            .set({
-          'addedBy': extraData['addedBy'] ?? '',
-          'reason': 'DNC',
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      }
+      // ── Blacklist number permanently ──────────────────────────────────────
+      await FirestoreService.suppressionCol(tenantId).doc(phone).set({
+        'addedBy': extraData['addedBy'] ?? '',
+        'reason': 'DNC',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
     }
-    // 'convert', 'close', 'info' → no extra action needed.
+    // 'convert', 'close', 'info' → dispose only, no extra action.
   }
 
-  // Get leads for audit (manager)
+  // ── Release lead lock (caller goes idle) ──────────────────────────────────
+
+  static Future<void> releaseLead(
+      String tenantId, String campaignId, String phone) async {
+    // Put the number back into the unfiltered bucket.
+    await FirestoreService.rawNumbersDoc(tenantId, campaignId, 'unfiltered')
+        .set({'numbers': FieldValue.arrayUnion([phone])},
+            SetOptions(merge: true));
+
+    // Reset lead doc status.
+    await FirestoreService.leadsCol(tenantId, campaignId).doc(phone).update({
+      'status': 'raw',
+      'assignedTo': '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ── Batch insert phone numbers ────────────────────────────────────────────
+  //
+  // Appends all phones to the unfiltered bucket in a single write.
+  // Individual lead documents are NOT pre-created; they are created lazily
+  // when a number is popped from the queue.
+
+  static Future<void> batchInsertLeads(
+      String tenantId,
+      String campaignId,
+      List<String> phones) async {
+    if (phones.isEmpty) return;
+    await FirestoreService.rawNumbersDoc(tenantId, campaignId, 'unfiltered')
+        .set({'numbers': FieldValue.arrayUnion(phones)},
+            SetOptions(merge: true));
+  }
+
+  // ── Audit query ───────────────────────────────────────────────────────────
+
   static Stream<QuerySnapshot> getLeadsForAudit(
       String tenantId, String campaignId) {
-    return FirestoreService.leadsCol(tenantId)
-        .where('campaignId', isEqualTo: campaignId)
+    return FirestoreService.leadsCol(tenantId, campaignId)
         .where('status', isEqualTo: 'disposed')
         .orderBy('updatedAt', descending: true)
         .limit(100)
         .snapshots();
   }
 
-  // Search leads by phone
-  static Future<QuerySnapshot> searchLeadByPhone(
-      String tenantId, String phone) async {
-    return FirestoreService.leadsCol(tenantId)
-        .where('phone', isEqualTo: phone)
-        .get();
-  }
+  // ── Search by phone ───────────────────────────────────────────────────────
 
-  // Batch insert leads from CSV
-  static Future<void> batchInsertLeads(
-      String tenantId,
-      String campaignId,
-      List<Map<String, dynamic>> leads) async {
-    final db = FirebaseFirestore.instance;
-    final batches = <WriteBatch>[];
-    var batch = db.batch();
-    int count = 0;
-
-    for (final lead in leads) {
-      final ref = FirestoreService.leadsCol(tenantId).doc();
-      batch.set(ref, {
-        ...lead,
-        'campaignId': campaignId,
-        'tenantId': tenantId,
-        'status': 'raw',
-        'source': 'csv',
-        'attempts': 0,
-        'retryCount': 0,
-        'formData': {},
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      count++;
-
-      // Firestore batch limit is 500
-      if (count == 500) {
-        batches.add(batch);
-        batch = db.batch();
-        count = 0;
-      }
-    }
-
-    if (count > 0) batches.add(batch);
-    for (final b in batches) await b.commit();
-  }
-
-  // Release lock if caller goes idle
-  static Future<void> releaseLead(
-      String tenantId, String leadId) async {
-    return FirestoreService.leadsCol(tenantId)
-        .doc(leadId)
-        .update({
-          'status': 'raw',
-          'assignedTo': '',
-          'lockedAt': null,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
+  static Future<DocumentSnapshot> searchLeadByPhone(
+      String tenantId, String campaignId, String phone) {
+    return FirestoreService.leadsCol(tenantId, campaignId).doc(phone).get();
   }
 }
