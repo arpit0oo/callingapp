@@ -35,6 +35,21 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   static const _textSecondary = Color(0xFF5F6368);
   static const _textHint = Color(0xFF9AA0A6);
 
+  // ── Recent calls future ─────────────────────────────────────
+  Future<QuerySnapshot>? _recentCallsFuture;
+
+  void _fetchRecentCalls() {
+    _recentCallsFuture = FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(AppSession.tenantId)
+        .collection('leads')
+        .where('assignedTo', isEqualTo: AppSession.userId)
+        .where('status', isEqualTo: 'disposed')
+        .orderBy('updatedAt', descending: true)
+        .limit(5)
+        .get();
+  }
+
   // ── Shift timer ───────────────────────────────────────────────
   Timer? _shiftTimer;
   String _shiftDuration = '';
@@ -76,6 +91,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   @override
   void initState() {
     super.initState();
+    _fetchRecentCalls();
     _initShiftTimer();
   }
 
@@ -390,15 +406,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
           ),
           const SizedBox(height: 12),
           FutureBuilder<QuerySnapshot>(
-            future: FirebaseFirestore.instance
-                .collection('tenants')
-                .doc(AppSession.tenantId)
-                .collection('leads')
-                .where('assignedTo', isEqualTo: AppSession.userId)
-                .where('status', isEqualTo: 'disposed')
-                .orderBy('updatedAt', descending: true)
-                .limit(5)
-                .get(),
+            future: _recentCallsFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
