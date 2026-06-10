@@ -1,0 +1,3094 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<script>
+  /* Prevent flash of wrong theme — runs before any render */
+  (function () {
+    var t = localStorage.getItem('xcall-theme') || 'light';
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>XCall — Device Control Panel</title>
+  <meta name="description"
+    content="XCall remote control panel — monitor and manage incoming calls from any device in real time." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+
+  <!-- XCall secrets — loaded from xcall-config.js (gitignored). -->
+  <!-- Copy xcall-config.example.js → xcall-config.js and fill in real values. -->
+  <script src="xcall-config.js"></script>
+
+  <!-- Firebase JS SDK v9 — compat mode -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <style>
+    /* ─── Design tokens ─────────────────────────────────────────────── */
+    :root {
+      /* Core palette — Light (default) */
+      --bg-0: #f0f4f8;
+      --bg-1: #ffffff;
+      --bg-2: #f8fafc;
+      --bg-3: #eef2f7;
+      --border: rgba(15, 23, 42, .09);
+      --accent: #4f46e5;
+      --accent2: #6366f1;
+      --green: #16a34a;
+      --green2: #15803d;
+      --red: #dc2626;
+      --red2: #b91c1c;
+      --amber: #d97706;
+      --text-1: #0f172a;
+      --text-2: #475569;
+      --text-3: #94a3b8;
+      --glass: rgba(255, 255, 255, .72);
+      --shadow: 0 4px 24px rgba(15, 23, 42, .08);
+      --radius: 16px;
+      --radius-sm: 10px;
+      /* Floating call stack card */
+      --cs-bg: rgba(255, 255, 255, 0.90);
+      --cs-shd: 0 8px 40px rgba(15,23,42,.13), 0 1px 0 rgba(255,255,255,.9) inset;
+      --cs-ring-bdr: rgba(22,163,74,.45);
+      --cs-ring-shd: 0 8px 40px rgba(15,23,42,.13), 0 0 20px rgba(22,163,74,.10) inset;
+      --cs-act-bdr: rgba(79,70,229,.38);
+      --cs-act-shd: 0 8px 40px rgba(15,23,42,.13), 0 0 20px rgba(79,70,229,.08) inset;
+      /* Incoming / active call cards */
+      --cc-bg: linear-gradient(135deg, rgba(22,163,74,.07), rgba(22,163,74,.02));
+      --cc-bdr: rgba(22,163,74,.30);
+      --cc-shd: 0 2px 16px rgba(22,163,74,.08);
+      --cc-glow: rgba(22,163,74,.09);
+      --ac-bg: linear-gradient(135deg, rgba(79,70,229,.07), rgba(79,70,229,.02));
+      --ac-bdr: rgba(79,70,229,.28);
+      --ac-shd: 0 2px 16px rgba(79,70,229,.08);
+      --ac-glow: rgba(79,70,229,.08);
+      /* Device card states */
+      --dc-on-bg: linear-gradient(145deg, rgba(22,163,74,.07), var(--bg-1) 70%);
+      --dc-on-bdr: rgba(22,163,74,.40);
+      --dc-on-shd: 0 0 16px rgba(22,163,74,.09);
+      --dc-on-bdr-h: rgba(22,163,74,.60);
+      --dc-rg-bg: linear-gradient(145deg, rgba(217,119,6,.07), var(--bg-1) 70%);
+      --dc-rg-bdr: rgba(217,119,6,.45);
+      --dc-rg-shd: 0 0 16px rgba(217,119,6,.10);
+      --dc-rg-bdr-h: rgba(217,119,6,.65);
+      --dc-off-bg: rgba(241,245,249,.92);
+      --dc-off-bdr: rgba(220,38,38,.22);
+      --dc-off-bdr-h: rgba(220,38,38,.40);
+      /* Badges */
+      --b-idle-bg: rgba(148,163,184,.20);
+      --b-idle-c: var(--text-2);
+      --b-idle-bdr: rgba(148,163,184,.35);
+      --b-on-bg: rgba(22,163,74,.12);
+      --b-on-bdr: rgba(22,163,74,.30);
+      --b-rg-bg: rgba(217,119,6,.12);
+      --b-rg-bdr: rgba(217,119,6,.35);
+      --b-rg-pulse: rgba(217,119,6,.40);
+      --b-off-bg: rgba(220,38,38,.10);
+      --b-off-bdr: rgba(220,38,38,.28);
+      /* Misc */
+      --row-hover: rgba(79,70,229,.04);
+      --overlay: rgba(15,23,42,.35);
+      --modal-shd: 0 16px 48px rgba(15,23,42,.18);
+      --pk-idle: rgba(22,163,74,.12);
+      --pk-ring: rgba(217,119,6,.12);
+      --pk-act: rgba(79,70,229,.12);
+      --pk-off: rgba(148,163,184,.20);
+    }
+
+    /* ─── Dark theme overrides ──────────────────────────────────────── */
+    html[data-theme="dark"] {
+      --bg-0: #0a0d14;
+      --bg-1: #111827;
+      --bg-2: #1a2235;
+      --bg-3: #222d42;
+      --border: rgba(255,255,255,.07);
+      --accent: #6366f1;
+      --accent2: #818cf8;
+      --green: #22c55e;
+      --green2: #16a34a;
+      --red: #ef4444;
+      --red2: #dc2626;
+      --amber: #f59e0b;
+      --text-1: #f1f5f9;
+      --text-2: #94a3b8;
+      --text-3: #475569;
+      --glass: rgba(255,255,255,.03);
+      --shadow: 0 8px 32px rgba(0,0,0,.5);
+      --cs-bg: rgba(14,18,30,0.85);
+      --cs-shd: 0 12px 48px rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.06) inset;
+      --cs-ring-bdr: rgba(34,197,94,.38);
+      --cs-ring-shd: 0 12px 48px rgba(0,0,0,.6), 0 0 24px rgba(34,197,94,.10) inset;
+      --cs-act-bdr: rgba(99,102,241,.38);
+      --cs-act-shd: 0 12px 48px rgba(0,0,0,.6), 0 0 24px rgba(99,102,241,.10) inset;
+      --cc-bg: linear-gradient(135deg, rgba(34,197,94,.12), rgba(34,197,94,.04));
+      --cc-bdr: rgba(34,197,94,.35);
+      --cc-shd: none;
+      --cc-glow: rgba(34,197,94,.15);
+      --ac-bg: linear-gradient(135deg, rgba(99,102,241,.14), rgba(99,102,241,.04));
+      --ac-bdr: rgba(99,102,241,.35);
+      --ac-shd: none;
+      --ac-glow: rgba(99,102,241,.15);
+      --dc-on-bg: linear-gradient(145deg, rgba(34,197,94,.10), var(--bg-1) 70%);
+      --dc-on-bdr: rgba(34,197,94,.45);
+      --dc-on-shd: 0 0 20px rgba(34,197,94,.10);
+      --dc-on-bdr-h: rgba(34,197,94,.65);
+      --dc-rg-bg: linear-gradient(145deg, rgba(245,158,11,.10), var(--bg-1) 70%);
+      --dc-rg-bdr: rgba(245,158,11,.50);
+      --dc-rg-shd: 0 0 20px rgba(245,158,11,.12);
+      --dc-rg-bdr-h: rgba(245,158,11,.70);
+      --dc-off-bg: rgba(15,18,26,.85);
+      --dc-off-bdr: rgba(239,68,68,.28);
+      --dc-off-bdr-h: rgba(239,68,68,.45);
+      --b-idle-bg: rgba(71,85,105,.35);
+      --b-idle-c: var(--text-3);
+      --b-idle-bdr: rgba(71,85,105,.3);
+      --b-on-bg: rgba(34,197,94,.18);
+      --b-on-bdr: rgba(34,197,94,.35);
+      --b-rg-bg: rgba(245,158,11,.20);
+      --b-rg-bdr: rgba(245,158,11,.40);
+      --b-rg-pulse: rgba(245,158,11,.45);
+      --b-off-bg: rgba(239,68,68,.18);
+      --b-off-bdr: rgba(239,68,68,.35);
+      --row-hover: rgba(255,255,255,.02);
+      --overlay: rgba(0,0,0,.65);
+      --modal-shd: 0 24px 64px rgba(0,0,0,.7);
+      --pk-idle: rgba(34,197,94,.2);
+      --pk-ring: rgba(245,158,11,.2);
+      --pk-act: rgba(99,102,241,.2);
+      --pk-off: rgba(71,85,105,.3);
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-0);
+      color: var(--text-1);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ─── Scrollbar ─────────────────────────────────────────────────── */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-1);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--bg-3);
+      border-radius: 3px;
+    }
+
+    /* ─── Header ────────────────────────────────────────────────────── */
+    header {
+      background: var(--bg-1);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+
+    .header-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    .logo-text {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -.5px;
+      background: linear-gradient(90deg, var(--accent2), #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-2);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-3);
+      transition: background .4s;
+    }
+
+    .status-dot.live {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+    }
+
+    /* ─── Main layout ───────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      max-width: 960px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 32px 24px;
+    }
+
+    /* ─── Legacy single banners — superseded by call stack ───────── */
+    #incoming-call-banner,
+    #active-call-card {
+      display: none !important;
+    }
+
+    /* ─── Floating Call Stack ───────────────────────────────────────── */
+    #call-notification-stack {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 360px;
+      max-width: calc(100vw - 32px);
+      pointer-events: none;
+    }
+
+    .cs-card {
+      pointer-events: all;
+      border-radius: 20px;
+      padding: 18px 20px;
+      backdrop-filter: blur(28px) saturate(1.6);
+      -webkit-backdrop-filter: blur(28px) saturate(1.6);
+      background: var(--cs-bg);
+      border: 1px solid var(--border);
+      box-shadow: var(--cs-shd);
+      animation: csSlideIn .32s cubic-bezier(.16,1,.3,1) both;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .cs-card--ringing {
+      border-color: var(--cs-ring-bdr);
+      box-shadow: var(--cs-ring-shd);
+    }
+
+    .cs-card--active {
+      border-color: var(--cs-act-bdr);
+      box-shadow: var(--cs-act-shd);
+    }
+
+    @keyframes csSlideIn {
+      from { opacity:0; transform: translateX(32px) scale(.95); }
+      to   { opacity:1; transform: translateX(0)   scale(1);   }
+    }
+
+    .cs-top {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .cs-avatar {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 21px;
+      flex-shrink: 0;
+    }
+
+    .cs-card--ringing .cs-avatar {
+      background: linear-gradient(135deg, var(--green), #059669);
+      box-shadow: 0 0 0 3px rgba(34,197,94,.22);
+      animation: csRingGlow 1.6s ease-in-out infinite;
+    }
+
+    .cs-card--active .cs-avatar {
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      box-shadow: 0 0 0 3px rgba(99,102,241,.25);
+    }
+
+    @keyframes csRingGlow {
+      0%,100% { box-shadow: 0 0 0 3px rgba(34,197,94,.22), 0 0 0   rgba(34,197,94,0); }
+      50%      { box-shadow: 0 0 0 3px rgba(34,197,94,.22), 0 0 20px rgba(34,197,94,.38); }
+    }
+
+    .cs-info { flex: 1; min-width: 0; }
+
+    .cs-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .cs-card--ringing .cs-badge { color: var(--green); }
+    .cs-card--active  .cs-badge { color: var(--accent2); }
+
+    .cs-badge-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      animation: blink 1s ease-in-out infinite;
+    }
+
+    .cs-card--ringing .cs-badge-dot { background: var(--green); }
+    .cs-card--active  .cs-badge-dot { background: var(--accent2); }
+
+    .cs-name {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -.3px;
+      color: var(--text-1);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cs-number {
+      font-size: 12px;
+      color: var(--text-2);
+      margin-top: 2px;
+      letter-spacing: .3px;
+    }
+
+    .cs-device {
+      font-size: 11px;
+      color: var(--text-3);
+      font-family: 'Courier New', monospace;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cs-timer {
+      font-size: 12px;
+      font-family: 'Courier New', monospace;
+      color: var(--accent2);
+      letter-spacing: 1px;
+      margin-top: 4px;
+    }
+
+    .cs-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .cs-btn {
+      flex: 1;
+      padding: 10px 12px;
+      border: none;
+      border-radius: 12px;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .12s, opacity .15s;
+    }
+
+    .cs-btn:hover    { transform: translateY(-1px); }
+    .cs-btn:active   { transform: scale(.96); }
+    .cs-btn:disabled { opacity: .42; cursor: not-allowed; transform: none; }
+
+    .cs-btn-accept { background: linear-gradient(135deg,var(--green),var(--green2)); color:#fff; }
+    .cs-btn-reject { background: linear-gradient(135deg,var(--red),var(--red2));     color:#fff; }
+    .cs-btn-end    { background: linear-gradient(135deg,var(--red),var(--red2));     color:#fff; }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-24px) scale(.98);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .call-card {
+      background: var(--cc-bg);
+      border: 1px solid var(--cc-bdr);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: var(--cc-shd);
+    }
+
+    .call-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at top left, var(--cc-glow), transparent 60%);
+      pointer-events: none;
+    }
+
+    /* Ring animation ring behind avatar */
+    .call-ring {
+      position: absolute;
+      top: 24px;
+      left: 28px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 2px solid rgba(34, 197, 94, .4);
+      animation: ringPulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes ringPulse {
+      0% {
+        transform: scale(1);
+        opacity: .9;
+      }
+
+      50% {
+        transform: scale(1.45);
+        opacity: 0;
+      }
+
+      100% {
+        transform: scale(1), opacity: 0;
+      }
+    }
+
+    .call-card-inner {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .caller-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--green), #059669);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 1;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, .25);
+    }
+
+    .caller-info {
+      flex: 1;
+      min-width: 160px;
+    }
+
+    .caller-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--green);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .caller-label .blink {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: blink 1s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: .2;
+      }
+    }
+
+    .caller-number {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -.5px;
+      color: var(--text-1);
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .caller-device {
+      font-size: 12px;
+      color: var(--text-3);
+      font-family: 'Courier New', monospace;
+    }
+
+    /* Accept / Reject buttons */
+    .call-actions {
+      display: flex;
+      gap: 12px;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+
+    .btn-call {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .15s, box-shadow .15s, filter .15s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-call::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(255, 255, 255, .12);
+      opacity: 0;
+      transition: opacity .2s;
+    }
+
+    .btn-call:hover::after {
+      opacity: 1;
+    }
+
+    .btn-call:hover {
+      transform: translateY(-2px);
+    }
+
+    .btn-call:active {
+      transform: translateY(0) scale(.97);
+    }
+
+    .btn-accept {
+      background: linear-gradient(135deg, var(--green), var(--green2));
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(34, 197, 94, .4);
+    }
+
+    .btn-reject {
+      background: linear-gradient(135deg, var(--red), var(--red2));
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(239, 68, 68, .4);
+    }
+
+    /* ─── Active call card — hidden; replaced by #call-notification-stack ── */
+
+    .active-card {
+      background: var(--ac-bg);
+      border: 1px solid var(--ac-bdr);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: var(--ac-shd);
+    }
+
+    .active-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at top left, var(--ac-glow), transparent 60%);
+      pointer-events: none;
+    }
+
+    .active-card-inner {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .active-avatar {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, .3);
+    }
+
+    .active-info {
+      flex: 1;
+      min-width: 160px;
+    }
+
+    .on-call-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--green);
+      background: rgba(34, 197, 94, .15);
+      border: 1px solid rgba(34, 197, 94, .3);
+      padding: 3px 10px 3px 8px;
+      border-radius: 99px;
+      margin-bottom: 8px;
+    }
+
+    .on-call-badge .blink {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: blink 1s ease-in-out infinite;
+    }
+
+    .active-number {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -.5px;
+      color: var(--text-1);
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .call-timer {
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+      color: var(--accent2);
+      letter-spacing: 1px;
+    }
+
+    .btn-end-call {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--red), var(--red2));
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(239, 68, 68, .4);
+      transition: transform .15s, box-shadow .15s;
+      position: relative;
+      overflow: hidden;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+
+    .btn-end-call::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(255, 255, 255, .12);
+      opacity: 0;
+      transition: opacity .2s;
+    }
+
+    .btn-end-call:hover::after {
+      opacity: 1;
+    }
+
+    .btn-end-call:hover {
+      transform: translateY(-2px);
+    }
+
+    .btn-end-call:active {
+      transform: translateY(0) scale(.97);
+    }
+
+    /* ─── Section title ─────────────────────────────────────────────── */
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 16px;
+    }
+
+    /* ─── Devices grid ──────────────────────────────────────────────── */
+    #devices-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    /* ── Device card base ──────────────────────────────────────────── */
+    .device-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      transition: border-color .35s, background .35s, box-shadow .35s, transform .2s;
+      cursor: default;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .device-card:hover {
+      transform: translateY(-2px);
+    }
+
+    /* IDLE — grey/neutral (default) */
+    .device-card.state-idle {
+      background: var(--bg-1);
+      border-color: var(--border);
+    }
+    .device-card.state-idle:hover {
+      border-color: rgba(148, 163, 184, .25);
+    }
+
+    /* ACTIVE — green tint */
+    .device-card.state-active {
+      background: var(--dc-on-bg);
+      border-color: var(--dc-on-bdr);
+      box-shadow: var(--dc-on-shd);
+    }
+    .device-card.state-active:hover {
+      border-color: var(--dc-on-bdr-h);
+    }
+
+    /* RINGING — amber tint */
+    .device-card.state-ringing {
+      background: var(--dc-rg-bg);
+      border-color: var(--dc-rg-bdr);
+      box-shadow: var(--dc-rg-shd);
+    }
+    .device-card.state-ringing:hover {
+      border-color: var(--dc-rg-bdr-h);
+    }
+
+    /* OFFLINE — muted */
+    .device-card.state-offline {
+      background: var(--dc-off-bg);
+      border-color: var(--dc-off-bdr);
+      opacity: .82;
+    }
+    .device-card.state-offline:hover {
+      border-color: var(--dc-off-bdr-h);
+      opacity: 1;
+    }
+
+    .device-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .device-uid {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-2);
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ── State badges ─────────────────────────────────────────────── */
+    .state-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 99px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* IDLE */
+    .badge-idle {
+      background: var(--b-idle-bg);
+      color: var(--b-idle-c);
+      border: 1px solid var(--b-idle-bdr);
+    }
+
+    /* ON CALL (active) */
+    .badge-active {
+      background: var(--b-on-bg);
+      color: var(--green);
+      border: 1px solid var(--b-on-bdr);
+    }
+
+    /* RINGING — pulsing amber */
+    .badge-ringing {
+      background: var(--b-rg-bg);
+      color: var(--amber);
+      border: 1px solid var(--b-rg-bdr);
+      animation: badgePulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes badgePulse {
+      0%, 100% { box-shadow: 0 0 0 0 var(--b-rg-pulse); }
+      50%       { box-shadow: 0 0 0 5px transparent; }
+    }
+
+    /* OFFLINE */
+    .badge-offline {
+      background: var(--b-off-bg);
+      color: var(--red);
+      border: 1px solid var(--b-off-bdr);
+    }
+
+    /* ── Card body text ───────────────────────────────────────────── */
+    .device-number {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 5px;
+      min-height: 24px;
+      color: var(--text-1);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .device-updated {
+      font-size: 11px;
+      color: var(--text-3);
+    }
+
+    /* ─── Empty state ───────────────────────────────────────────────── */
+    #empty-state {
+      text-align: center;
+      padding: 64px 24px;
+      color: var(--text-3);
+    }
+
+    #empty-state .empty-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: .5;
+    }
+
+    #empty-state p {
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    /* ─── Auth bar ──────────────────────────────────────────────────── */
+    #auth-status {
+      font-size: 12px;
+      color: var(--text-3);
+      text-align: center;
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-1);
+    }
+
+    /* ─── Responsive ────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      header {
+        padding: 0 16px;
+      }
+
+      main {
+        padding: 20px 16px;
+      }
+
+      .call-card {
+        padding: 18px;
+      }
+
+      .caller-number {
+        font-size: 20px;
+      }
+
+      .call-actions {
+        margin-left: 0;
+        width: 100%;
+      }
+
+      .btn-call {
+        flex: 1;
+        justify-content: center;
+      }
+    }
+
+    /* ─── Contacts section ──────────────────────────────────────────── */
+    #contacts-section {
+      margin-top: 48px;
+    }
+
+    .contacts-panel {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+
+    .contacts-panel-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .contacts-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-1);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .contacts-panel-title .icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .contacts-panel-body {
+      padding: 20px 24px;
+    }
+
+    /* Upload zone */
+    .upload-zone {
+      border: 2px dashed rgba(99, 102, 241, .35);
+      border-radius: var(--radius-sm);
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+
+    .upload-zone:hover,
+    .upload-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(99, 102, 241, .05);
+    }
+
+    .upload-zone input[type=file] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .upload-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    .upload-label {
+      font-size: 13px;
+      color: var(--text-2);
+      line-height: 1.6;
+    }
+
+    .upload-label strong {
+      color: var(--accent2);
+    }
+
+    /* Preview table */
+    #csv-preview-wrap {
+      display: none;
+      margin-top: 18px;
+    }
+
+    .preview-meta {
+      font-size: 12px;
+      color: var(--text-3);
+      margin-bottom: 10px;
+    }
+
+    .preview-table-wrap {
+      overflow-x: auto;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+    }
+
+    .preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .preview-table th {
+      background: var(--bg-2);
+      color: var(--text-3);
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      padding: 10px 14px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .preview-table td {
+      padding: 9px 14px;
+      border-top: 1px solid var(--border);
+      color: var(--text-2);
+      white-space: nowrap;
+    }
+
+    .preview-table tr:hover td {
+      background: var(--row-hover);
+    }
+
+    /* Upload action bar */
+    .upload-actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-upload {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 22px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--accent), #7c3aed);
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(99, 102, 241, .35);
+      transition: transform .15s, opacity .15s;
+    }
+
+    .btn-upload:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-upload:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-clear-csv {
+      font-size: 12px;
+      color: var(--text-3);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 0;
+      font-family: 'Inter', sans-serif;
+      transition: color .2s;
+    }
+
+    .btn-clear-csv:hover {
+      color: var(--text-2);
+    }
+
+    #upload-status {
+      font-size: 12px;
+      color: var(--text-3);
+      margin-top: 10px;
+      min-height: 18px;
+    }
+
+    #upload-status.ok {
+      color: var(--green);
+    }
+
+    #upload-status.err {
+      color: var(--red);
+    }
+
+    /* Progress bar */
+    .progress-track {
+      height: 4px;
+      background: var(--bg-3);
+      border-radius: 2px;
+      margin-top: 8px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), #a855f7);
+      border-radius: 2px;
+      transition: width .2s;
+    }
+
+    /* Search bar */
+    .contacts-search-wrap {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .contacts-search-wrap .search-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    .contacts-search-input-wrap {
+      position: relative;
+      flex: 1;
+    }
+
+    #contacts-search {
+      width: 100%;
+      padding: 10px 14px 10px 38px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-1);
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    #contacts-search::placeholder {
+      color: var(--text-3);
+    }
+
+    #contacts-search:focus {
+      border-color: rgba(99, 102, 241, .5);
+    }
+
+    .btn-search {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--accent), #7c3aed);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, .35);
+      transition: transform .15s, opacity .15s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .btn-search:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-search:active {
+      transform: translateY(0) scale(.97);
+    }
+
+    .btn-search:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Contacts table */
+    .contacts-table-wrap {
+      overflow-x: auto;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      max-height: 420px;
+      overflow-y: auto;
+    }
+
+    .contacts-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .contacts-table th {
+      background: var(--bg-2);
+      color: var(--text-3);
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      padding: 10px 14px;
+      text-align: left;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .contacts-table td {
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+      color: var(--text-2);
+    }
+
+    .contacts-table td:first-child {
+      color: var(--text-1);
+      font-weight: 500;
+    }
+
+    .contacts-table tr:hover td {
+      background: var(--row-hover);
+    }
+
+    .btn-dial {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      border: none;
+      border-radius: 6px;
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--green), var(--green2));
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(34, 197, 94, .3);
+      transition: transform .12s, opacity .12s;
+    }
+
+    .btn-dial:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-dial:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    #contacts-list-status {
+      font-size: 12px;
+      color: var(--text-3);
+      padding: 16px 0 4px;
+    }
+
+    #contacts-empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-3);
+      font-size: 13px;
+    }
+
+    /* ─── Device Picker Modal ────────────────────────────────────────── */
+    #device-picker-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: var(--overlay);
+      backdrop-filter: blur(8px);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn .18s ease both;
+    }
+
+    #device-picker-overlay.open {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    .picker-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      width: 100%;
+      max-width: 460px;
+      margin: 0 16px;
+      box-shadow: var(--modal-shd);
+      animation: slideUp .22s cubic-bezier(.16, 1, .3, 1) both;
+      overflow: hidden;
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px) scale(.97);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .picker-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-1);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .picker-title-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+    }
+
+    .picker-subtitle {
+      font-size: 12px;
+      color: var(--text-3);
+      font-weight: 400;
+      margin-top: 2px;
+    }
+
+    .btn-picker-close {
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-2);
+      color: var(--text-2);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background .15s, color .15s;
+      flex-shrink: 0;
+    }
+
+    .btn-picker-close:hover {
+      background: var(--bg-3);
+      color: var(--text-1);
+    }
+
+    .picker-body {
+      padding: 16px 24px 24px;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+
+    .picker-calling-number {
+      font-size: 12px;
+      color: var(--text-3);
+      background: var(--bg-2);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .picker-calling-number strong {
+      color: var(--text-1);
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+    }
+
+    .picker-device-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .picker-device-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      transition: border-color .2s;
+    }
+
+    .picker-device-row.row-eligible {
+      border-color: rgba(99, 102, 241, .25);
+    }
+
+    .picker-device-uid {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--text-2);
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .picker-state-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+      padding: 3px 9px;
+      border-radius: 99px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .picker-badge-idle {
+      background: rgba(22, 163, 74, .12);
+      color: var(--green);
+    }
+
+    .picker-badge-ringing {
+      background: rgba(217, 119, 6, .12);
+      color: var(--amber);
+    }
+
+    .picker-badge-active {
+      background: rgba(79, 70, 229, .12);
+      color: var(--accent2);
+    }
+
+    .picker-badge-offline {
+      background: rgba(148, 163, 184, .20);
+      color: var(--text-3);
+    }
+
+    .btn-picker-use {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 7px;
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--accent), #7c3aed);
+      color: #fff;
+      box-shadow: 0 3px 12px rgba(99, 102, 241, .4);
+      transition: transform .12s, opacity .12s;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    .btn-picker-use:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-picker-use:active {
+      transform: translateY(0) scale(.97);
+    }
+
+    .btn-picker-use:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .picker-empty {
+      text-align: center;
+      padding: 32px 0;
+      color: var(--text-3);
+      font-size: 13px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ── Floating Call Stack — renders one card per ringing/active device ── -->
+  <div id="call-notification-stack" aria-live="assertive" aria-label="Active calls"></div>
+
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <header>
+    <div class="header-logo">
+      <div class="logo-icon">📞</div>
+      <span class="logo-text">XCall</span>
+    </div>
+    <div class="header-right">
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark/light mode" title="Toggle theme">
+        <span id="theme-icon">🌙</span>
+      </button>
+      <div class="header-status">
+        <div class="status-dot" id="live-dot"></div>
+        <span id="live-label">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main ───────────────────────────────────────────────────────── -->
+  <main>
+
+    <!-- Legacy banners kept for DOM-ref safety — hidden by CSS -->
+    <div id="incoming-call-banner" aria-hidden="true">
+      <div id="banner-number"></div>
+      <div id="banner-contact-name"></div>
+      <div id="banner-device"></div>
+      <button id="btn-accept"></button>
+      <button id="btn-reject"></button>
+    </div>
+    <div id="active-call-card" aria-hidden="true">
+      <div id="active-number"></div>
+      <div id="active-number-sub"></div>
+      <div id="active-call-device"></div>
+      <div id="call-timer"></div>
+      <button id="btn-end-call"></button>
+    </div>
+
+    <!-- ── Contacts Section ────────────────────────────────────────── -->
+    <section id="contacts-section" aria-label="Contacts">
+
+      <p class="section-title">Contacts</p>
+
+      <!-- Contacts list panel (first) -->
+      <div class="contacts-panel">
+        <div class="contacts-panel-header">
+          <div class="contacts-panel-title">
+            <div class="icon">👥</div>
+            Contacts List
+          </div>
+          <span id="contacts-list-status"></span>
+        </div>
+        <div class="contacts-panel-body">
+
+          <div class="contacts-search-wrap">
+            <div class="contacts-search-input-wrap">
+              <span class="search-icon">🔍</span>
+              <input type="search" id="contacts-search" placeholder="Type a name or number to search…" />
+            </div>
+            <button class="btn-search" id="btn-contacts-search">
+              Search
+            </button>
+          </div>
+
+          <div class="contacts-table-wrap">
+            <table class="contacts-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Phone</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="contacts-table-body">
+                <tr>
+                  <td colspan="3" id="contacts-empty">Type at least 3 characters to search.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+        </div>
+      </div>
+
+      </div>
+      </div>
+
+    </section>
+
+    <!-- Device grid -->
+    <p class="section-title" style="margin-top:48px;">Connected Devices</p>
+    <div id="devices-grid">
+      <div id="empty-state">
+        <div class="empty-icon">📡</div>
+        <p>Waiting for devices to connect…<br />Open XCall on your Android device.</p>
+      </div>
+    </div>
+
+    <!-- ── Devices Management Section ─────────────────────────────────── -->
+    <section id="devices-mgmt-section" style="margin-top:32px;margin-bottom:8px;">
+      <p class="section-title">Device Management</p>
+      <div class="contacts-panel">
+        <div class="contacts-panel-header">
+          <div class="contacts-panel-title">
+            <div class="icon">📱</div>
+            Registered Devices
+          </div>
+          <span id="devices-mgmt-status" style="font-size:12px;color:var(--text-3);"></span>
+        </div>
+        <div class="contacts-panel-body" style="padding:0;">
+          <div style="overflow-x:auto;border-radius:var(--radius-sm);">
+            <table class="contacts-table" id="devices-mgmt-table">
+              <thead>
+                <tr>
+                  <th>Android ID</th>
+                  <th>Device Name</th>
+                  <th>Status</th>
+                  <th>Last Seen</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="devices-mgmt-body">
+                <tr>
+                  <td colspan="5" style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;">No devices
+                    connected yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── CSV Import (bottom) ───────────────────────────────────────────── -->
+    <div class="contacts-panel" style="margin-top:48px;">
+      <div class="contacts-panel-header">
+        <div class="contacts-panel-title">
+          <div class="icon">📥</div>
+          Import from CSV
+        </div>
+      </div>
+      <div class="contacts-panel-body">
+
+        <!-- Drop zone -->
+        <div class="upload-zone" id="upload-zone">
+          <input type="file" id="csv-file-input" accept=".csv" />
+          <div class="upload-icon">📂</div>
+          <div class="upload-label">
+            <strong>Click to choose</strong> or drag a CSV file here<br />
+            Google Contacts export format
+          </div>
+        </div>
+
+        <!-- Preview -->
+        <div id="csv-preview-wrap">
+          <div class="preview-meta" id="csv-preview-meta"></div>
+          <div class="preview-table-wrap">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Name</th>
+                  <th>Phone</th>
+                </tr>
+              </thead>
+              <tbody id="csv-preview-body"></tbody>
+            </table>
+          </div>
+
+          <div class="upload-actions">
+            <button class="btn-upload" id="btn-upload-contacts">
+              ☁️ Upload to Firebase
+            </button>
+            <button class="btn-clear-csv" id="btn-clear-csv">✕ Clear</button>
+          </div>
+
+          <div id="upload-status"></div>
+          <div class="progress-track" id="upload-progress-track">
+            <div class="progress-fill" id="upload-progress-fill"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ── Device Picker Modal ──────────────────────────────────────────── -->
+  <div id="device-picker-overlay" role="dialog" aria-modal="true" aria-labelledby="picker-title-text">
+    <div class="picker-card">
+      <div class="picker-header">
+        <div class="picker-title">
+          <div class="picker-title-icon">📱</div>
+          <div>
+            <div id="picker-title-text">Select Device to Call From</div>
+            <div class="picker-subtitle">Only idle &amp; online devices can be selected</div>
+          </div>
+        </div>
+        <button class="btn-picker-close" id="btn-picker-close" aria-label="Close"
+          onclick="closeDevicePicker()">✕</button>
+      </div>
+      <div class="picker-body">
+        <div class="picker-calling-number" id="picker-calling-label">
+          📞 Calling: <strong id="picker-phone-display">—</strong>
+        </div>
+        <div class="picker-device-list" id="picker-device-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth bar -->
+  <div id="auth-status">Authenticating…</div>
+
+  <!-- ── Firebase + app logic ────────────────────────────────────────── -->
+  <script>
+    // ── Firebase config — loaded from xcall-config.js (gitignored) ──────
+    // Edit xcall-config.js (copied from xcall-config.example.js) to change credentials.
+    const app = firebase.initializeApp(XCALL_FIREBASE_CONFIG);
+    const db = firebase.firestore();
+    const auth = firebase.auth();
+    const db_rtdb = firebase.database(app); // Realtime Database — device state source
+
+    // ── State ─────────────────────────────────────────────────────────
+    const deviceMap = {};              // uid → {state, incomingNumber, onCall, online, lastSeen, ...}
+    const activeCallSessions = new Map(); // uid → {state, number, resolvedName, timerInterval, timerStart}
+    const _pendingDialMap = new Map(); // uid → phone — survives idle-state RTDB race for outgoing calls
+
+    // ── DOM refs ──────────────────────────────────────────────────────
+    const devGrid    = document.getElementById('devices-grid');
+    const emptyState = document.getElementById('empty-state');
+    const liveDot    = document.getElementById('live-dot');
+    const liveLabel  = document.getElementById('live-label');
+    const authBar    = document.getElementById('auth-status');
+
+    // ── Anonymous auth then start listener ────────────────────────────
+    auth.signInAnonymously()
+      .then(cred => {
+        authBar.textContent = `Signed in as ${cred.user.uid.slice(0, 8)}… (web observer)`;
+        startDeviceStateListener();
+      })
+      .catch(err => {
+        authBar.textContent = `Auth error: ${err.message}`;
+      });
+
+    // ── RTDB real-time listener on devices/ ───────────────────────────
+    // Device state (ringing / active / idle) comes from RTDB.
+    // Commands (accept / reject / end / dial) are written to RTDB commands/{uid}.
+    function startDeviceStateListener() {
+      const devicesRef = db_rtdb.ref('devices');
+
+      devicesRef.on('value', snapshot => {
+        // Mark live
+        liveDot.classList.add('live');
+        liveLabel.textContent = 'Live';
+
+        const all = snapshot.val() || {};
+
+        // Remove cards for UIDs that disappeared — also close any open sessions
+        Object.keys(deviceMap).forEach(uid => {
+          if (!all[uid]) {
+            delete deviceMap[uid];
+            removeDeviceCard(uid);
+            if (activeCallSessions.has(uid)) { stopSessionTimer(uid); activeCallSessions.delete(uid); }
+          }
+        });
+
+        // Upsert all present devices
+        Object.entries(all).forEach(([uid, data]) => {
+          deviceMap[uid] = {
+            state:          data.state          || 'idle',
+            incomingNumber: data.incomingNumber || null,
+            onCall:         data.onCall         || null,
+            online:         data.online         || false,
+            lastSeen:       data.lastSeen       || null,
+            androidId:      data.androidId      || null,
+            deviceName:     data.deviceName     || null
+          };
+          upsertDeviceCard(uid, deviceMap[uid]);
+
+          const st = deviceMap[uid].state;
+          if ((st === 'ringing' || st === 'active') && deviceMap[uid].online) {
+            if (!activeCallSessions.has(uid)) {
+              // Log raw payload so we can see exactly what Android sends
+              console.log('[XCall] New session RTDB data:', JSON.stringify(data));
+              // Sanitise the literal string "unknown" that Android writes as a fallback
+              const sanitise = v => (v && v.trim() !== '' && v.toLowerCase() !== 'unknown') ? v.trim() : null;
+              const num = _pendingDialMap.get(uid)
+                || sanitise(data.onCall)
+                || sanitise(data.incomingNumber)
+                || sanitise(data.number)
+                || sanitise(data.phoneNumber)
+                || null;
+              _pendingDialMap.delete(uid);
+              console.log('[XCall] Resolved session number:', num, '| state:', st);
+              activeCallSessions.set(uid, { state: st, number: num, resolvedName: '__pending__', timerInterval: null, timerStart: null });
+            } else {
+              const s = activeCallSessions.get(uid);
+              const prev = s.state;
+              s.state = st;
+              // Upgrade a missing/null number once a real value arrives on a later tick
+              const sanitise = v => (v && v.trim() !== '' && v.toLowerCase() !== 'unknown') ? v.trim() : null;
+              if (!s.number) {
+                s.number = sanitise(data.onCall) || sanitise(data.incomingNumber) || sanitise(data.number) || sanitise(data.phoneNumber) || null;
+                // If we just got the number for the first time, patch the live card DOM immediately
+                if (s.number) {
+                  const numEl = document.getElementById('cs-number-' + uid);
+                  if (numEl) numEl.textContent = s.number;
+                  const nameEl = document.getElementById('cs-name-' + uid);
+                  if (nameEl && nameEl.textContent === 'Unknown') nameEl.textContent = s.number;
+                  // Also trigger contact lookup now that we have the number
+                  if (s.resolvedName === '__pending__') lookupContactForCard(uid, s.number);
+                }
+              }
+              if (prev === 'ringing' && st === 'active') startSessionTimer(uid);
+            }
+          } else {
+            if (activeCallSessions.has(uid)) { stopSessionTimer(uid); activeCallSessions.delete(uid); }
+          }
+        });
+
+        renderCallStack();
+        renderDevicesMgmtTable();
+
+      }, err => {
+        liveLabel.textContent = 'Error: ' + err.message;
+        liveDot.classList.remove('live');
+      });
+    }
+
+    // ── Per-card Firestore contact lookup ──────────────────────────────
+    // Async: patches the live card DOM elements when the Firestore result arrives.
+    function lookupContactForCard(uid, number) {
+      const cleaned = number.replace(/\D/g, '').slice(-10);
+      if (!cleaned) return;
+      db.collection('Contacts').doc(cleaned).get()
+        .then(docSnap => {
+          const session = activeCallSessions.get(uid);
+          if (!session) return;
+          const nameEl   = document.getElementById('cs-name-'   + uid);
+          const numberEl = document.getElementById('cs-number-' + uid);
+
+          if (!docSnap.exists) {
+            // No saved contact — primary = 'Unknown', secondary = raw number
+            session.resolvedName = null;
+            if (nameEl)   nameEl.textContent   = 'Unknown';
+            if (numberEl) numberEl.textContent = number;
+            return;
+          }
+
+          const d = docSnap.data();
+          const name = (Array.isArray(d.names) && d.names.length)
+            ? d.names.join(', ')
+            : (d.name || null);
+          session.resolvedName = name;
+          // Primary: contact name if found, else 'Unknown'
+          if (nameEl)   nameEl.textContent   = name || 'Unknown';
+          // Secondary: ALWAYS the raw number
+          if (numberEl) numberEl.textContent = number;
+        })
+        .catch(() => {
+          // On network error: leave primary as-is, still show raw number in secondary
+          const numberEl = document.getElementById('cs-number-' + uid);
+          if (numberEl) numberEl.textContent = number;
+        });
+    }
+
+    // ── Floating Call Stack renderer ───────────────────────────────────
+    // Diffs the #call-notification-stack: removes stale cards, adds new ones.
+    // Existing cards are updated in-place (no re-animation on tick).
+    function renderCallStack() {
+      const stack = document.getElementById('call-notification-stack');
+
+      // Remove cards for sessions that ended
+      Array.from(stack.querySelectorAll('.cs-card')).forEach(card => {
+        if (!activeCallSessions.has(card.dataset.uid)) card.remove();
+      });
+
+      // Add / update per-session cards
+      activeCallSessions.forEach((session, uid) => {
+        const isRinging = session.state === 'ringing';
+        const existing  = document.getElementById('cs-card-' + uid);
+
+        if (existing) {
+          // Update state-driven class and badge text only
+          existing.className = 'cs-card cs-card--' + session.state;
+          const badgeEl = document.getElementById('cs-badge-text-' + uid);
+          if (badgeEl) badgeEl.textContent = isRinging ? 'Incoming Call' : 'On Call';
+          // Transition ringing → active: swap action buttons and add timer
+          if (!isRinging && existing.querySelector('.cs-btn-accept')) {
+            const actionsEl = document.getElementById('cs-actions-' + uid);
+            if (actionsEl) actionsEl.innerHTML =
+              `<button class="cs-btn cs-btn-end" id="cs-end-${uid}" onclick="endCall('${uid}')">📵 End Call</button>`;
+            const info = existing.querySelector('.cs-info');
+            if (info && !document.getElementById('cs-timer-' + uid)) {
+              const t = document.createElement('div');
+              t.className = 'cs-timer'; t.id = 'cs-timer-' + uid; t.textContent = '00:00';
+              info.appendChild(t);
+            }
+            const av = existing.querySelector('.cs-avatar');
+            if (av) av.textContent = '📞';
+            startSessionTimer(uid);
+          }
+          return;
+        }
+
+        // displayName / displayNum:
+        //   While __pending__: show raw number in primary (or 'Unknown' if number is also null)
+        //   After lookup:      show contact name (or 'Unknown') in primary, raw number in secondary
+        const isPending   = session.resolvedName === '__pending__';
+        const displayName = isPending
+          ? (session.number || 'Unknown')
+          : (session.resolvedName || 'Unknown');
+        const displayNum  = session.number || '';
+        const devName     = deviceLabel(uid);
+
+        const card = document.createElement('div');
+        card.className    = 'cs-card cs-card--' + session.state;
+        card.id           = 'cs-card-' + uid;
+        card.dataset.uid  = uid;
+        card.innerHTML = `
+          <div class="cs-top">
+            <div class="cs-avatar">${isRinging ? '📲' : '📞'}</div>
+            <div class="cs-info">
+              <div class="cs-badge">
+                <span class="cs-badge-dot"></span>
+                <span id="cs-badge-text-${uid}">${isRinging ? 'Incoming Call' : 'On Call'}</span>
+              </div>
+              <div class="cs-name" id="cs-name-${uid}">${escHtml(displayName)}</div>
+              <div id="cs-number-${uid}" style="font-size:13px; color:var(--text-2); margin-top:2px; margin-bottom:4px; letter-spacing:0.5px; min-height:16px;">${escHtml(displayNum)}</div>
+              <div class="cs-device">${escHtml(devName)}</div>
+              ${!isRinging ? `<div class="cs-timer" id="cs-timer-${uid}">00:00</div>` : ''}
+            </div>
+          </div>
+          <div class="cs-actions" id="cs-actions-${uid}">
+            ${isRinging
+              ? `<button class="cs-btn cs-btn-accept" id="cs-accept-${uid}" onclick="acceptCall('${uid}')">✅ Accept</button>
+                 <button class="cs-btn cs-btn-reject" id="cs-reject-${uid}" onclick="rejectCall('${uid}')">❌ Reject</button>`
+              : `<button class="cs-btn cs-btn-end" id="cs-end-${uid}" onclick="endCall('${uid}')">📵 End Call</button>`
+            }
+          </div>`;
+        stack.appendChild(card);
+
+        if (!isRinging) startSessionTimer(uid);
+        // Trigger contact lookup only once — when we have a number and haven't looked up yet
+        if (session.number && session.resolvedName === '__pending__') {
+          lookupContactForCard(uid, session.number);
+        } else if (!session.number) {
+          // Number not yet available — mark name as Unknown so user sees something
+          // The "existing session" upgrade path will patch the DOM when the number arrives
+          const nameEl = document.getElementById('cs-name-' + uid);
+          // nameEl already shows 'Unknown' from displayName — nothing more to do
+        }
+      });
+    }
+
+    // ── Per-session timer helpers ──────────────────────────────────────
+    function startSessionTimer(uid) {
+      const s = activeCallSessions.get(uid);
+      if (!s || s.timerInterval) return;
+      s.timerStart    = Date.now();
+      s.timerInterval = setInterval(() => {
+        const el = document.getElementById('cs-timer-' + uid);
+        if (!el) return;
+        const e = Math.floor((Date.now() - s.timerStart) / 1000);
+        el.textContent = String(Math.floor(e / 60)).padStart(2,'0') + ':' + String(e % 60).padStart(2,'0');
+      }, 1000);
+    }
+
+    function stopSessionTimer(uid) {
+      const s = activeCallSessions.get(uid);
+      if (!s || !s.timerInterval) return;
+      clearInterval(s.timerInterval);
+      s.timerInterval = null;
+      s.timerStart    = null;
+    }
+
+
+    function lookupContactName(number) {
+      if (!number || number === _lastLookedUpNumber) return;
+      _lastLookedUpNumber = number;
+      bannerContactName.textContent = ''; // clear previous
+
+      const cleaned = number.replace(/\D/g, '').slice(-10);
+      if (!cleaned) return;
+
+      db.collection('Contacts').doc(cleaned).get()
+        .then(docSnap => {
+          if (!docSnap.exists) return;
+          const d = docSnap.data();
+          const nameStr = Array.isArray(d.names) && d.names.length
+            ? d.names.join(', ')
+            : (d.name || '');
+          if (nameStr) bannerContactName.textContent = nameStr;
+        })
+        .catch(() => { /* silently ignore */ });
+    }
+
+    // ── Firestore contact name lookup for active call banner ──────────
+    let _lastActiveNumber = null;
+
+    function lookupActiveContactName(number) {
+      if (!number || number === _lastActiveNumber) return;
+      _lastActiveNumber = number;
+      activeNumSubEl.textContent = ''; // clear while loading
+
+      const cleaned = number.replace(/\D/g, '').slice(-10);
+      if (!cleaned) return;
+
+      db.collection('Contacts').doc(cleaned).get()
+        .then(docSnap => {
+          if (!docSnap.exists) {
+            // No saved contact — show "Unknown" as primary, raw number as sub-line
+            activeNumEl.textContent = 'Unknown';
+            activeNumSubEl.textContent = number;
+            return;
+          }
+          const d = docSnap.data();
+          const nameStr = Array.isArray(d.names) && d.names.length
+            ? d.names.join(', ')
+            : (d.name || '');
+          if (nameStr) {
+            // Contact found — promote name to primary, raw number to secondary
+            activeNumEl.textContent = nameStr;
+            activeNumSubEl.textContent = number;
+          } else {
+            // Document exists but name field is empty — treat as unknown
+            activeNumEl.textContent = 'Unknown';
+            activeNumSubEl.textContent = number;
+          }
+        })
+        .catch(() => {
+          // On network/permission error, still show raw number below
+          activeNumSubEl.textContent = number;
+        });
+    }
+
+    // ── Banner + active card sync ─────────────────────────────────────
+    function syncBanner() {
+      // Priority: ringing > active
+      const ringingUid = Object.keys(deviceMap).find(
+        uid => deviceMap[uid].state === 'ringing'
+      ) || null;
+
+      const activeUid = Object.keys(deviceMap).find(
+        uid => deviceMap[uid].state === 'active'
+      ) || null;
+
+      // ── Incoming banner ───────────────────────────────────────────
+      if (ringingUid) {
+        const dev = deviceMap[ringingUid];
+        activeRingUid = ringingUid;
+        bannerNum.textContent = dev.incomingNumber || 'Unknown Number';
+        bannerDev.textContent = `Device: ${deviceLabel(ringingUid)}`;
+        banner.classList.add('visible');
+        // Firestore contact lookup for the incoming number
+        lookupContactName(dev.incomingNumber);
+      } else {
+        banner.classList.remove('visible');
+        bannerContactName.textContent = '';
+        _lastLookedUpNumber = null;
+        activeRingUid = null;
+      }
+
+      // ── Active call card ──────────────────────────────────────────
+      if (activeUid) {
+        const dev = deviceMap[activeUid];
+        const isNewCall = activeCallUid !== activeUid;
+
+        // Always update activeCallUid so rapid uid changes are captured
+        activeCallUid = activeUid;
+
+        if (isNewCall) {
+          // New call session — resolve raw number. Source priority:
+          //   1. _pendingDialNumber  — outgoing: set by pickerSelectDevice, race-safe
+          //   2. activeCallNumber    — outgoing: fast path (not wiped by idle race)
+          //   3. dev.onCall          — incoming answered
+          //   4. dev.incomingNumber  — incoming fallback
+          const source =
+            _pendingDialNumber ? 'pendingDial' :
+            activeCallNumber   ? 'activeCallNumber' :
+            dev.onCall         ? 'onCall' :
+            dev.incomingNumber ? 'incomingNumber' : 'none';
+
+          const num = _pendingDialNumber || activeCallNumber || dev.onCall || dev.incomingNumber || null;
+          _pendingDialNumber = null;  // consumed — clear so it doesn't bleed into next call
+          activeCallNumber   = num;
+
+          if (num) {
+            // Optimistic render: show raw number immediately while Firestore resolves
+            activeNumEl.textContent = num;
+            activeNumSubEl.textContent = '';
+            lookupActiveContactName(num);
+          } else {
+            // Truly no number available from any source
+            activeNumEl.textContent = 'Unknown';
+            activeNumSubEl.textContent = '';
+            _lastActiveNumber = null;
+          }
+
+          activeCallDeviceEl.textContent = 'via ' + deviceLabel(activeUid);
+          startTimer();
+          console.log(`[syncBanner] NEW active uid=${activeUid} | number=${num} | source=${source}`);
+
+        } else {
+          // Same ongoing call — upgrade from null/unknown if backend now has a number
+          if (!activeCallNumber && (dev.onCall || dev.incomingNumber)) {
+            activeCallNumber = dev.onCall || dev.incomingNumber;
+            activeNumEl.textContent = activeCallNumber;
+            activeNumSubEl.textContent = '';
+            lookupActiveContactName(activeCallNumber);
+          }
+          // Refresh device label (name may have just been saved)
+          activeCallDeviceEl.textContent = 'via ' + deviceLabel(activeUid);
+        }
+
+        activeCard.classList.add('visible');
+      } else {
+        // No active call — hide card, reset ALL call state so next dial starts clean
+        activeCard.classList.remove('visible');
+        stopTimer();
+        activeCallUid = null;
+        activeCallNumber = null;    // ← critical: clear so next dial never inherits stale number
+        _lastActiveNumber = null;   // ← reset so next call re-triggers contact lookup
+        activeNumEl.textContent = '—';
+        activeNumSubEl.textContent = '';
+        activeCallDeviceEl.textContent = '';
+      }
+    }
+
+    // ── Timer helpers ─────────────────────────────────────────────────
+    function startTimer() {
+      stopTimer(); // clear any existing interval first
+      timerStart = Date.now();
+      timerEl.textContent = '00:00';
+      timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+        const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const ss = String(elapsed % 60).padStart(2, '0');
+        timerEl.textContent = `${mm}:${ss}`;
+      }, 1000);
+    }
+
+    function stopTimer() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+      timerStart = null;
+      timerEl.textContent = '00:00';
+    }
+
+    // ── RPC Handshake — shared helper ─────────────────────────────────
+    // Writes the command payload, then attaches a ONE-TIME listener to
+    // commands/{uid}/action. Re-enables the button only when the Android
+    // backend clears action to null/empty, confirming execution.
+    function _sendRpc(targetUid, payload, btn, originalText, timeoutMs = 10000) {
+      const savedText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = originalText;
+      btn.style.opacity = '0.55';
+
+      const cmdRef = db_rtdb.ref('commands/' + targetUid);
+      const actionRef = cmdRef.child('action');
+
+      // Safety: auto-restore button after timeoutMs even if no ack arrives
+      const safetyTimer = setTimeout(() => {
+        actionRef.off('value', ackListener);
+        btn.disabled = false;
+        btn.textContent = savedText;
+        btn.style.opacity = '';
+        console.warn(`[RPC] Timeout waiting for ack on '${payload.action}' → uid=${targetUid}`);
+      }, timeoutMs);
+
+      // Listener fires when Android clears the command (action → null)
+      const ackListener = actionRef.on('value', snap => {
+        const current = snap.val();
+        // Ignore the initial echo of the value we just wrote
+        if (current === payload.action) return;
+        // action is null/empty → backend acknowledged
+        clearTimeout(safetyTimer);
+        actionRef.off('value', ackListener);
+        btn.disabled = false;
+        btn.textContent = savedText;
+        btn.style.opacity = '';
+        console.log(`[RPC] Ack received for '${payload.action}' on uid=${targetUid}`);
+      });
+
+      // Write the command after wiring the listener to avoid missing a fast ack
+      cmdRef.update({ ...payload, issuedAt: firebase.database.ServerValue.TIMESTAMP })
+        .then(() => console.log(`[RPC] '${payload.action}' written → uid=${targetUid}`))
+        .catch(err => {
+          clearTimeout(safetyTimer);
+          actionRef.off('value', ackListener);
+          btn.disabled = false;
+          btn.textContent = savedText;
+          btn.style.opacity = '';
+          alert(`Failed to send command '${payload.action}': ${err.message}`);
+        });
+    }
+
+    // ── Per-uid call commands — fully decoupled from global state ────────
+    function acceptCall(uid) {
+      const btn = document.getElementById('cs-accept-' + uid);
+      if (!btn) return;
+      const session = activeCallSessions.get(uid);
+      _sendRpc(uid, { action: 'accept', number: (session && session.number) || null }, btn, '⏳ Pending…', 10000);
+    }
+
+    function rejectCall(uid) {
+      const btn = document.getElementById('cs-reject-' + uid);
+      if (!btn) return;
+      _sendRpc(uid, { action: 'reject', number: null }, btn, '⏳ Rejecting…', 10000);
+    }
+
+    function endCall(uid) {
+      const btn = document.getElementById('cs-end-' + uid);
+      if (!btn) return;
+      _sendRpc(uid, { action: 'end', number: null }, btn, '⏳ Ending…', 12000);
+    }
+
+    // ── Device card helpers ───────────────────────────────────────────
+    function upsertDeviceCard(uid, dev) {
+      let card = document.getElementById('card-' + uid);
+
+      if (!card) {
+        card = document.createElement('div');
+        card.className = 'device-card';
+        card.id = 'card-' + uid;
+        card.innerHTML = `
+          <div class="device-card-header">
+            <div class="device-uid" title="${uid}"></div>
+            <span class="state-badge" id="badge-${uid}"></span>
+          </div>
+          <div class="device-number" id="num-${uid}"></div>
+          <div class="device-updated" id="upd-${uid}"></div>
+        `;
+        devGrid.appendChild(card);
+        emptyState.style.display = 'none';
+      }
+
+      // ── Resolve visual state (offline beats any RTDB state) ──────────
+      const isOffline = !dev.online;
+      const visState = isOffline ? 'offline' : (dev.state || 'idle');
+
+      // ── State class on card ──────────────────────────────────────────
+      card.classList.remove('state-idle', 'state-active', 'state-ringing', 'state-offline');
+      card.classList.add('state-' + visState);
+
+      // ── Device name label ─────────────────────────────────────────────
+      card.querySelector('.device-uid').textContent = deviceLabel(uid);
+      card.querySelector('.device-uid').title = uid;
+
+      // ── Badge ─────────────────────────────────────────────────────────
+      const badge = document.getElementById('badge-' + uid);
+      const badgeMeta = {
+        idle:     { cls: 'badge-idle',    dot: '',   label: 'IDLE'    },
+        active:   { cls: 'badge-active',  dot: '●',  label: 'ON CALL' },
+        ringing:  { cls: 'badge-ringing', dot: '◉',  label: 'RINGING' },
+        offline:  { cls: 'badge-offline', dot: '',   label: 'OFFLINE' },
+      };
+      const bm = badgeMeta[visState] || badgeMeta.idle;
+      badge.className = 'state-badge ' + bm.cls;
+      badge.innerHTML = bm.dot ? `<span style="font-size:7px;line-height:1;">${bm.dot}</span>${bm.label}` : bm.label;
+
+      // ── Subtitle (device-number element) ─────────────────────────────
+      const numEl = document.getElementById('num-' + uid);
+      if (visState === 'idle') {
+        numEl.textContent = 'Ready to call';
+        numEl.style.color = 'var(--text-3)';
+        numEl.style.fontSize = '13px';
+        numEl.style.fontWeight = '400';
+      } else if (visState === 'active') {
+        const num = dev.onCall || dev.incomingNumber || null;
+        numEl.textContent = num || 'Active call';
+        numEl.style.color = 'var(--green)';
+        numEl.style.fontSize = num ? '17px' : '14px';
+        numEl.style.fontWeight = '600';
+      } else if (visState === 'ringing') {
+        numEl.textContent = dev.incomingNumber || 'Incoming call';
+        numEl.style.color = 'var(--amber)';
+        numEl.style.fontSize = '17px';
+        numEl.style.fontWeight = '600';
+      } else { // offline
+        const lastStr = dev.lastSeen
+          ? 'Last seen: ' + new Date(dev.lastSeen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : 'Last seen: unknown';
+        numEl.textContent = lastStr;
+        numEl.style.color = 'var(--text-3)';
+        numEl.style.fontSize = '12px';
+        numEl.style.fontWeight = '400';
+      }
+
+      // ── Footer timestamp ──────────────────────────────────────────────
+      const upd = document.getElementById('upd-' + uid);
+      if (visState !== 'offline' && dev.lastSeen) {
+        upd.textContent = 'Updated ' + new Date(dev.lastSeen).toLocaleTimeString();
+      } else {
+        upd.textContent = '';
+      }
+    }
+
+    function removeDeviceCard(uid) {
+      const card = document.getElementById('card-' + uid);
+      if (card) card.remove();
+      if (Object.keys(deviceMap).length === 0) {
+        emptyState.style.display = '';
+      }
+    }
+
+    // ── Device label helper ───────────────────────────────────────────────────
+    /** Returns deviceName if set, else androidId, else first 8 chars of uid. */
+    function deviceLabel(uid) {
+      const dev = deviceMap[uid];
+      if (!dev) return uid.slice(0, 8) + '…';
+      return dev.deviceName || dev.androidId || (uid.slice(0, 8) + '…');
+    }
+
+    // ── Device Management Table ───────────────────────────────────────────────
+    const devMgmtBody = document.getElementById('devices-mgmt-body');
+    const devMgmtStatus = document.getElementById('devices-mgmt-status');
+
+    function renderDevicesMgmtTable() {
+      const uids = Object.keys(deviceMap);
+
+      // ── Update header count ─────────────────────────────────────────
+      devMgmtStatus.textContent = uids.length ? `${uids.length} device${uids.length !== 1 ? 's' : ''}` : '';
+
+      // ── Remove rows for UIDs no longer present ──────────────────────
+      Array.from(devMgmtBody.querySelectorAll('tr[id^="mgmt-row-"]')).forEach(tr => {
+        const rowUid = tr.id.replace('mgmt-row-', '');
+        if (!deviceMap[rowUid]) tr.remove();
+      });
+
+      // ── Show empty placeholder if no devices ────────────────────────
+      const existingEmpty = document.getElementById('mgmt-empty-row');
+      if (uids.length === 0) {
+        if (!existingEmpty) {
+          const emptyTr = document.createElement('tr');
+          emptyTr.id = 'mgmt-empty-row';
+          emptyTr.innerHTML = '<td colspan="5" style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;">No devices connected yet.</td>';
+          devMgmtBody.appendChild(emptyTr);
+        }
+        return;
+      }
+      if (existingEmpty) existingEmpty.remove();
+
+      const badgeCls = { idle: 'badge-idle', ringing: 'badge-ringing', active: 'badge-active', offline: 'badge-offline' };
+      const badgeLbl = { idle: 'idle', ringing: 'ringing', active: 'active', offline: 'offline' };
+
+      uids.forEach(uid => {
+        const dev = deviceMap[uid];
+        const stateKey = !dev.online ? 'offline' : (dev.state || 'idle');
+
+        let tr = document.getElementById('mgmt-row-' + uid);
+
+        if (!tr) {
+          // ── First time: build the full row structure ─────────────────
+          tr = document.createElement('tr');
+          tr.id = 'mgmt-row-' + uid;
+          // Android ID cell (static — never changes)
+          const tdId = document.createElement('td');
+          tdId.style.cssText = "font-family:'Courier New',monospace;font-size:12px;color:var(--text-2);";
+          tdId.textContent = dev.androidId || '—';
+          // Name cell
+          const tdName = document.createElement('td');
+          tdName.id = 'mgmt-name-cell-' + uid;
+          // Status badge cell
+          const tdStatus = document.createElement('td');
+          const badge = document.createElement('span');
+          badge.id = 'mgmt-badge-' + uid;
+          badge.className = 'state-badge';
+          tdStatus.appendChild(badge);
+          // Last Seen cell
+          const tdSeen = document.createElement('td');
+          tdSeen.id = 'mgmt-seen-' + uid;
+          tdSeen.style.cssText = 'font-size:11px;color:var(--text-3);';
+          // Actions cell
+          const tdActions = document.createElement('td');
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn-dial';
+          editBtn.style.cssText = 'background:linear-gradient(135deg,var(--accent),#7c3aed);box-shadow:none;';
+          editBtn.textContent = '✏️ Edit';
+          editBtn.addEventListener('click', () => startEditDeviceName(uid));
+          tdActions.appendChild(editBtn);
+
+          tr.append(tdId, tdName, tdStatus, tdSeen, tdActions);
+          devMgmtBody.appendChild(tr);
+        }
+
+        // ── Targeted updates — never touch cells that are in edit mode ──
+        const nameCell = document.getElementById('mgmt-name-cell-' + uid);
+        // Only update name cell if it is NOT currently showing an <input> (i.e. not in edit mode)
+        if (nameCell && !nameCell.querySelector('input')) {
+          nameCell.textContent = dev.deviceName || (uid.slice(0, 8) + '…');
+        }
+
+        const badge = document.getElementById('mgmt-badge-' + uid);
+        if (badge) {
+          badge.className = 'state-badge ' + (badgeCls[stateKey] || 'badge-idle');
+          badge.textContent = badgeLbl[stateKey] || stateKey;
+        }
+
+        const seenCell = document.getElementById('mgmt-seen-' + uid);
+        if (seenCell) {
+          seenCell.textContent = dev.lastSeen ? new Date(dev.lastSeen).toLocaleTimeString() : '—';
+        }
+      });
+    }
+
+    function startEditDeviceName(uid) {
+      const cell = document.getElementById('mgmt-name-cell-' + uid);
+      if (!cell || cell.querySelector('input')) return; // already editing
+      const dev = deviceMap[uid];
+      const current = dev ? (dev.deviceName || '') : '';
+
+      // Build edit UI using DOM nodes (no innerHTML) so it survives RTDB ticks
+      cell.textContent = '';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;gap:8px;align-items:center;';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.id = 'mgmt-name-input-' + uid;
+      input.value = current;
+      input.placeholder = 'e.g. Living Room Phone';
+      input.style.cssText = 'flex:1;padding:6px 10px;background:var(--bg-2);border:1px solid rgba(99,102,241,.5);border-radius:6px;color:var(--text-1);font-family:Inter,sans-serif;font-size:12px;outline:none;';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn-dial';
+      saveBtn.style.background = 'linear-gradient(135deg,var(--green),var(--green2))';
+      saveBtn.textContent = 'Save';
+      saveBtn.addEventListener('click', () => saveDeviceName(uid));
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.style.cssText = 'background:none;border:none;color:var(--text-3);cursor:pointer;font-size:13px;';
+      cancelBtn.textContent = '✕';
+      cancelBtn.addEventListener('click', () => {
+        cell.textContent = dev ? (dev.deviceName || uid.slice(0, 8) + '…') : uid.slice(0, 8) + '…';
+      });
+
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') saveDeviceName(uid);
+        if (e.key === 'Escape') cancelBtn.click();
+      });
+
+      wrap.append(input, saveBtn, cancelBtn);
+      cell.appendChild(wrap);
+      input.focus();
+      input.select();
+    }
+
+    function saveDeviceName(uid) {
+      const input = document.getElementById('mgmt-name-input-' + uid);
+      if (!input) return;
+      const name = input.value.trim();
+      const cell = document.getElementById('mgmt-name-cell-' + uid);
+
+      // Optimistic UI: collapse the input immediately
+      if (cell) cell.textContent = name || uid.slice(0, 8) + '…';
+
+      db_rtdb.ref('devices/' + uid + '/deviceName')
+        .set(name || null)
+        .then(() => {
+          console.log(`deviceName saved for ${uid}: "${name}"`);
+          // Update local map — next RTDB tick will re-confirm via targeted update
+          if (deviceMap[uid]) deviceMap[uid].deviceName = name || null;
+          // Refresh device grid card label (targeted, no re-render)
+          const labelEl = document.querySelector('#card-' + uid + ' .device-uid');
+          if (labelEl) labelEl.textContent = deviceLabel(uid);
+        })
+        .catch(err => {
+          // Restore cell on failure
+          if (cell) cell.textContent = deviceMap[uid] ? (deviceMap[uid].deviceName || uid.slice(0, 8) + '…') : uid.slice(0, 8) + '…';
+          alert('Failed to save device name: ' + err.message);
+        });
+    }
+
+
+    // CONTACTS — CSV import + Firestore write + searchable list
+    // ════════════════════════════════════════════════════════════════════
+
+    // ── State ──────────────────────────────────────────────────────────
+    let parsedContacts = []; // [{name, phone}] after CSV parse
+    let allContacts = []; // [{name, phone}] loaded from Firestore
+
+    // ── DOM refs ───────────────────────────────────────────────────────
+    const csvFileInput = document.getElementById('csv-file-input');
+    const uploadZone = document.getElementById('upload-zone');
+    const csvPreviewWrap = document.getElementById('csv-preview-wrap');
+    const csvPreviewMeta = document.getElementById('csv-preview-meta');
+    const csvPreviewBody = document.getElementById('csv-preview-body');
+    const btnUploadContacts = document.getElementById('btn-upload-contacts');
+    const btnClearCsv = document.getElementById('btn-clear-csv');
+    const uploadStatus = document.getElementById('upload-status');
+    const uploadProgressTrack = document.getElementById('upload-progress-track');
+    const uploadProgressFill = document.getElementById('upload-progress-fill');
+    const contactsSearch = document.getElementById('contacts-search');
+    const contactsTableBody = document.getElementById('contacts-table-body');
+    const contactsListStatus = document.getElementById('contacts-list-status');
+
+    // ── CSV parsing ────────────────────────────────────────────────────
+
+    /**
+     * Parse a Google Contacts CSV string.
+     * Handles quoted fields that may contain commas or newlines.
+     * Returns [{name, phone}].
+     */
+    function parseGoogleContactsCsv(text) {
+      const rows = splitCsvRows(text);
+      if (rows.length < 2) return [];
+
+      const headers = rows[0].map(h => h.trim());
+      const idx = h => headers.indexOf(h);
+
+      const iFirst = idx('First Name');
+      const iMiddle = idx('Middle Name');
+      const iLast = idx('Last Name');
+      const iPhone1 = idx('Phone 1 - Value');
+      const iPhone2 = idx('Phone 2 - Value');
+      const iPhone3 = idx('Phone 3 - Value');
+
+      const contacts = [];
+
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const first = (iFirst >= 0 ? row[iFirst] : '').trim();
+        const middle = (iMiddle >= 0 ? row[iMiddle] : '').trim();
+        const last = (iLast >= 0 ? row[iLast] : '').trim();
+        const rawName = [first, middle, last].filter(Boolean).join(' ') || null;
+
+        const phoneFields = [iPhone1, iPhone2, iPhone3]
+          .filter(i => i >= 0)
+          .map(i => row[i] || '');
+
+        phoneFields.forEach(rawPhone => {
+          const phone = cleanPhone(rawPhone);
+          if (!phone) return; // skip empty / short
+
+          const name = rawName || phone; // fallback: use number as name
+          contacts.push({ name, phone });
+        });
+      }
+
+      return contacts;
+    }
+
+    /** Remove +91, country code variants, spaces, dashes — keep only digits. */
+    function cleanPhone(raw) {
+      let digits = raw.replace(/\D/g, ''); // strip non-digits
+      // Strip leading 91 if result would be 12 digits (Indian mobile)
+      if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+      // Strip leading 0 if 11 digits
+      if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+      return digits.length >= 10 ? digits.slice(-10) : '';
+    }
+
+    /**
+     * Robust CSV row/cell splitter that handles RFC-4180 quoted fields.
+     * Returns string[][].
+     */
+    function splitCsvRows(text) {
+      const rows = [];
+      let row = [], cell = '', inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inQuotes) {
+          if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+          else if (ch === '"') inQuotes = false;
+          else cell += ch;
+        } else {
+          if (ch === '"') { inQuotes = true; }
+          else if (ch === ',') { row.push(cell); cell = ''; }
+          else if (ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) {
+            if (ch === '\r') i++;
+            row.push(cell); cell = '';
+            if (row.some(Boolean)) rows.push(row);
+            row = [];
+          } else cell += ch;
+        }
+      }
+      if (cell || row.length) { row.push(cell); if (row.some(Boolean)) rows.push(row); }
+      return rows;
+    }
+
+    // ── File input handling ────────────────────────────────────────────
+
+    csvFileInput.addEventListener('change', () => {
+      const file = csvFileInput.files[0];
+      if (!file) return;
+      readAndPreviewCsv(file);
+    });
+
+    uploadZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      uploadZone.classList.add('drag-over');
+    });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+    uploadZone.addEventListener('drop', e => {
+      e.preventDefault();
+      uploadZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.endsWith('.csv')) readAndPreviewCsv(file);
+    });
+
+    function readAndPreviewCsv(file) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const text = e.target.result;
+        parsedContacts = parseGoogleContactsCsv(text);
+        renderCsvPreview();
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+
+    function renderCsvPreview() {
+      csvPreviewBody.innerHTML = '';
+      uploadStatus.textContent = '';
+      uploadStatus.className = '';
+
+      if (parsedContacts.length === 0) {
+        csvPreviewWrap.style.display = 'none';
+        setUploadStatus('No valid contacts found in this file. Check that it is a Google Contacts export.', 'err');
+        return;
+      }
+
+      const preview = parsedContacts.slice(0, 10);
+      preview.forEach((c, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${i + 1}</td><td>${escHtml(c.name)}</td><td>${escHtml(c.phone)}</td>`;
+        csvPreviewBody.appendChild(tr);
+      });
+
+      const total = parsedContacts.length;
+      csvPreviewMeta.textContent =
+        `${total} contact${total !== 1 ? 's' : ''} parsed` +
+        (total > 10 ? ` — showing first 10` : '') + '.';
+
+      csvPreviewWrap.style.display = 'block';
+      uploadProgressTrack.style.display = 'none';
+      uploadProgressFill.style.width = '0%';
+    }
+
+    // ── Firebase upload ────────────────────────────────────────────────
+
+    btnUploadContacts.addEventListener('click', async () => {
+      if (!parsedContacts.length) return;
+
+      btnUploadContacts.disabled = true;
+      uploadProgressTrack.style.display = 'block';
+      setUploadStatus('Uploading…', '');
+
+      const total = parsedContacts.length;
+      let done = 0;
+      let skipped = 0;
+
+      // Write in sequential micro-batches (Firestore compat set is fire-and-collect)
+      const BATCH_SIZE = 400; // stay under 500-write Firestore batch limit
+      const batches = [];
+      for (let i = 0; i < parsedContacts.length; i += BATCH_SIZE) {
+        batches.push(parsedContacts.slice(i, i + BATCH_SIZE));
+      }
+
+      for (const batch of batches) {
+        const writes = batch.map(c =>
+          db.collection('Contacts').doc(c.phone)
+            .set({
+              phone: c.phone,
+              names: firebase.firestore.FieldValue.arrayUnion(c.name),
+              ids: firebase.firestore.FieldValue.arrayUnion(c.name.split(' ')[0].toLowerCase()),
+              addedAt: Date.now()
+            }, { merge: true })
+            .then(() => done++)
+            .catch(() => skipped++)
+        );
+        await Promise.all(writes);
+        uploadProgressFill.style.width = Math.round((done / total) * 100) + '%';
+      }
+
+      const msg = `✅ ${done} contact${done !== 1 ? 's' : ''} uploaded` +
+        (skipped ? `, ${skipped} failed` : '') + '.';
+      setUploadStatus(msg, done > 0 ? 'ok' : 'err');
+      btnUploadContacts.disabled = false;
+
+      // Contacts list: prompt user to search instead of auto-reloading
+      setContactsEmpty('Contacts uploaded. Type at least 3 characters above to search.');
+      contactsListStatus.textContent = `${done} uploaded`;
+    });
+
+    btnClearCsv.addEventListener('click', () => {
+      parsedContacts = [];
+      csvPreviewWrap.style.display = 'none';
+      uploadStatus.textContent = '';
+      uploadStatus.className = '';
+      csvFileInput.value = '';
+      uploadProgressTrack.style.display = 'none';
+      uploadProgressFill.style.width = '0%';
+    });
+
+    function setUploadStatus(msg, cls) {
+      uploadStatus.textContent = msg;
+      uploadStatus.className = cls || '';
+    }
+
+    // ── Contacts search ────────────────────────────────────────────────────
+    const CONTACTS_LIMIT = 20;
+
+    function setContactsEmpty(msg) {
+      contactsTableBody.innerHTML =
+        `<tr><td colspan="3" id="contacts-empty">${escHtml(msg)}</td></tr>`;
+    }
+
+    function renderContactRows(contacts) {
+      contactsTableBody.innerHTML = '';
+      contacts.forEach(c => {
+        // Support both new {names:[...]} and legacy {name:"..."} documents
+        const nameList = Array.isArray(c.names) && c.names.length
+          ? c.names
+          : [c.name || c.phone || ''];
+
+        nameList.forEach(name => {
+          const tr = document.createElement('tr');
+          tr.innerHTML =
+            `<td>${escHtml(name)}</td>` +
+            `<td>${escHtml(c.phone || '')}</td>` +
+            `<td><button class="btn-dial" onclick="dialContact('${escAttr(c.phone || '')}',this)">` +
+            `📞 Call</button></td>`;
+          contactsTableBody.appendChild(tr);
+        });
+      });
+    }
+
+    /**
+     * Three-branch search strategy:
+     *  1. Exactly 10 digits → single point read (Contacts/{phone})
+     *  2. Digit prefix (<10 digits) → phone range query
+     *  3. Letters/mixed → array-contains query on names[]
+     */
+    async function searchContacts(raw) {
+      const term = (raw || '').trim();
+
+      if (term.length < 3) {
+        contactsListStatus.textContent = '';
+        setContactsEmpty('Type at least 3 characters to search.');
+        return;
+      }
+
+      contactsListStatus.textContent = 'Searching…';
+      contactsTableBody.innerHTML = '';
+
+      const isDigits = /^\d+$/.test(term);
+      const isExact10 = isDigits && term.length === 10;
+
+      try {
+
+        // ── Branch 1: exact 10-digit phone → point read ─────────────────
+        if (isExact10) {
+          const docSnap = await db.collection('Contacts').doc(term).get();
+
+          if (!docSnap.exists) {
+            contactsListStatus.textContent = '';
+            renderUnknownNumberRow(term);
+            return;
+          }
+
+          const d = { ...docSnap.data(), phone: docSnap.id };
+          contactsListStatus.textContent = '1 result';
+          renderContactRows([d]);
+          return;
+        }
+
+        // ── Branch 2: digit prefix → phone range query ───────────────────
+        if (isDigits) {
+          const snap = await db.collection('Contacts')
+            .where('phone', '>=', term)
+            .where('phone', '<=', term + '\uf8ff')
+            .limit(CONTACTS_LIMIT)
+            .get();
+
+          const results = snap.docs.map(d => ({ ...d.data(), phone: d.id }));
+
+          if (results.length === 0) {
+            contactsListStatus.textContent = '';
+            setContactsEmpty('No contacts found for "' + term + '".');
+            return;
+          }
+
+          contactsListStatus.textContent =
+            `${results.length} result${results.length !== 1 ? 's' : ''}`;
+          renderContactRows(results);
+          return;
+        }
+
+        // ── Branch 3: letters/mixed → parallel ids[] + names[] queries ───
+        const [snapIds, snapNames] = await Promise.all([
+          db.collection('Contacts')
+            .where('ids', 'array-contains', term.toLowerCase())
+            .limit(CONTACTS_LIMIT)
+            .get(),
+          db.collection('Contacts')
+            .where('names', 'array-contains', term)
+            .limit(CONTACTS_LIMIT)
+            .get()
+        ]);
+
+        // Merge & de-dupe by document id (phone)
+        const seen = new Set();
+        const results = [];
+        for (const snap of [snapIds, snapNames]) {
+          for (const doc of snap.docs) {
+            if (!seen.has(doc.id)) {
+              seen.add(doc.id);
+              results.push({ ...doc.data(), phone: doc.id });
+            }
+          }
+        }
+        const capped = results.slice(0, CONTACTS_LIMIT);
+
+        if (capped.length === 0) {
+          contactsListStatus.textContent = '';
+          setContactsEmpty('No contacts found for "' + term + '".');
+          return;
+        }
+
+        contactsListStatus.textContent =
+          `${capped.length} result${capped.length !== 1 ? 's' : ''}`;
+        renderContactRows(capped);
+
+      } catch (err) {
+        console.error('[XCall] Search failed:', err);
+        contactsListStatus.textContent = 'Error';
+        setContactsEmpty('Search error: ' + err.message);
+      }
+    }
+
+    /**
+     * Renders a single "Unknown / Not Saved" row for an unsaved 10-digit number,
+     * with a green Call button wired to dialContact().
+     */
+    function renderUnknownNumberRow(phone) {
+      contactsTableBody.innerHTML = '';
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td style="color:var(--text-3);font-style:italic;">Unknown / Not Saved</td>` +
+        `<td>${escHtml(phone)}</td>` +
+        `<td><button class="btn-dial" onclick="dialContact('${escAttr(phone)}',this)">` +
+        `📞 Call</button></td>`;
+      contactsTableBody.appendChild(tr);
+      contactsListStatus.textContent = 'Unsaved number';
+    }
+
+    // Search fires only on button click or Enter key
+    const btnContactsSearch = document.getElementById('btn-contacts-search');
+
+    btnContactsSearch.addEventListener('click', () =>
+      searchContacts(contactsSearch.value)
+    );
+
+    contactsSearch.addEventListener('keydown', e => {
+      if (e.key === 'Enter') searchContacts(contactsSearch.value);
+    });
+
+    // Reset message when field is cleared
+    contactsSearch.addEventListener('input', () => {
+      if (contactsSearch.value.trim() === '') {
+        contactsListStatus.textContent = '';
+        setContactsEmpty('Type at least 3 characters to search.');
+      }
+    });
+
+    // Initial placeholder — no Firestore call on load
+    setContactsEmpty('Type at least 3 characters to search.');
+
+
+
+    // ── Device Picker Modal ─────────────────────────────────────────────────
+
+    let _pickerPhone = null; // phone number pending dial selection
+
+    const pickerOverlay = document.getElementById('device-picker-overlay');
+    const pickerDeviceList = document.getElementById('picker-device-list');
+    const pickerPhoneEl = document.getElementById('picker-phone-display');
+
+    // Close on overlay click (outside card)
+    pickerOverlay.addEventListener('click', e => {
+      if (e.target === pickerOverlay) closeDevicePicker();
+    });
+    // Close on Escape
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') closeDevicePicker();
+    });
+
+    function openDevicePicker(phone) {
+      _pickerPhone = phone;
+      pickerPhoneEl.textContent = phone;
+      renderPickerDeviceList();
+      pickerOverlay.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeDevicePicker() {
+      pickerOverlay.classList.remove('open');
+      document.body.style.overflow = '';
+      _pickerPhone = null;
+    }
+
+    function renderPickerDeviceList() {
+      pickerDeviceList.innerHTML = '';
+      const uids = Object.keys(deviceMap);
+
+      if (uids.length === 0) {
+        pickerDeviceList.innerHTML =
+          '<div class="picker-empty">📡 No devices connected.<br/>Open XCall on your Android device.</div>';
+        return;
+      }
+
+      uids.forEach(uid => {
+        const dev = deviceMap[uid];
+        const eligible = dev.state === 'idle' && dev.online === true;
+        const stateKey = !dev.online ? 'offline' : dev.state;
+        const badgeMap = {
+          idle: 'picker-badge-idle', ringing: 'picker-badge-ringing',
+          active: 'picker-badge-active', offline: 'picker-badge-offline'
+        };
+        const labelMap = { idle: 'IDLE', ringing: 'RINGING', active: 'ON CALL', offline: 'OFFLINE' };
+
+        const row = document.createElement('div');
+        row.className = 'picker-device-row' + (eligible ? ' row-eligible' : '');
+        row.innerHTML =
+          `<div class="picker-device-uid" title="${uid}">${escHtml(deviceLabel(uid))}</div>` +
+          `<span class="picker-state-badge ${badgeMap[stateKey] || 'picker-badge-offline'}">${labelMap[stateKey] || stateKey.toUpperCase()}</span>` +
+          `<button class="btn-picker-use" ${eligible ? '' : 'disabled'}
+              onclick="pickerSelectDevice('${uid}')">Use</button>`;
+        pickerDeviceList.appendChild(row);
+      });
+    }
+
+    function pickerSelectDevice(uid) {
+      if (!_pickerPhone) return;
+      const phone = _pickerPhone;
+      closeDevicePicker();
+
+      // Register number in _pendingDialMap keyed by uid — race-safe path
+      // for outgoing calls: survives any idle-state RTDB snapshot fired
+      // between dial command send and Android going OFFHOOK.
+      _pendingDialMap.set(uid, phone);
+
+      db_rtdb.ref('commands/' + uid)
+        .update({
+          action: 'dial',
+          number: phone,
+          issuedAt: firebase.database.ServerValue.TIMESTAMP
+        })
+        .then(() => console.log(`Dial → ${phone} → device ${uid}`))
+        .catch(err => alert('Failed to send dial command: ' + err.message));
+    }
+
+    // ── Dial a contact ─────────────────────────────────────────────────────
+    /** Always opens the device picker modal. Alerts only if no devices are connected at all. */
+    function dialContact(phone, btn) {
+      if (!phone) return;
+
+      if (Object.keys(deviceMap).length === 0) {
+        alert('No connected device found. Open XCall on your Android device first.');
+        return;
+      }
+
+      openDevicePicker(phone);
+    }
+
+    // ── HTML escape helpers ─────────────────────────────────────────────────
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function escAttr(str) {
+      return String(str).replace(/'/g, '&#39;');
+    }
+
+    // ── Theme Toggle ────────────────────────────────────────────────────────
+    (function () {
+      const html = document.documentElement;
+      const btn  = document.getElementById('theme-toggle');
+      const icon = document.getElementById('theme-icon');
+
+      function applyTheme(t) {
+        html.dataset.theme = t;
+        localStorage.setItem('xcall-theme', t);
+        if (icon) icon.textContent = t === 'dark' ? '☀️' : '🌙';
+      }
+
+      // Sync icon with whatever theme the inline script already set
+      applyTheme(html.dataset.theme || 'light');
+
+      btn && btn.addEventListener('click', function () {
+        applyTheme(html.dataset.theme === 'dark' ? 'light' : 'dark');
+      });
+    })();
+
+  </script>
+
+</body>
+
+</html>

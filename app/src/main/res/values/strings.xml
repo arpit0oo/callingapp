@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">XCall</string>
+    <string name="accessibility_service_description">XCall call monitoring service</string>
+
+    <!-- Status Strings -->
+    <string name="status_dialer_ok">✅ XCall is the Default Dialer</string>
+    <string name="status_dialer_warn">⚠️ XCall is NOT the Default Dialer</string>
+    <string name="status_shizuku_ok">✅ Shizuku Running &amp; Authorized</string>
+    <string name="status_shizuku_pending">⚠️ Shizuku Running (Pending Auth)</string>
+    <string name="status_shizuku_none">❌ Shizuku Not Running</string>
+    <string name="status_shizuku_error">❌ Shizuku Error: %1$s</string>
+    <string name="status_accessibility_ok">✅ Accessibility Service: ACTIVE</string>
+    <string name="status_accessibility_warn">⚠️ Accessibility Service: INACTIVE</string>
+    <string name="status_firebase_ok">🔥 Firebase Connected\nUID: %1$s</string>
+    <string name="status_firebase_none">❌ Firebase Not Connected</string>
+
+    <!-- Placeholder Strings -->
+    <string name="checking_dialer">Checking dialer status…</string>
+    <string name="checking_shizuku">Checking Shizuku…</string>
+    <string name="checking_accessibility">Checking Accessibility…</string>
+    <string name="checking_firebase">Checking Firebase…</string>
+
+    <!-- Button Labels -->
+    <string name="btn_set_default">Set as Default Dialer</string>
+    <string name="btn_enable_accessibility">Enable Accessibility</string>
+    <string name="btn_miui_autostart">Open MIUI Autostart Settings</string>
+
+    <!-- Toast/Alert Strings -->
+    <string name="miui_autostart_desc">MIUI detected. Please enable Autostart for XCall to ensure services work correctly.</string>
+</resources>
