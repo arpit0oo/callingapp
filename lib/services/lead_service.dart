@@ -8,7 +8,52 @@ class LeadService {
   // A small race condition is accepted here; migrate to a Cloud Function
   // for atomic locking before production.
   static Future<Map<String, dynamic>?> getNextLead(
-      String tenantId, String campaignId, String callerId) async {
+      String tenantId, String campaignId, String callerId,
+      {String role = 'cold_caller'}) async {
+
+    // ── Warm-caller path: pull from callbacks queue ──────────────────────
+    if (role == 'warm_caller') {
+      final db = FirebaseFirestore.instance;
+      final now = Timestamp.now();
+
+      // 1. Find the oldest pending callback whose scheduled time has passed.
+      final cbQuery = await db
+          .collection('tenants')
+          .doc(tenantId)
+          .collection('callbacks')
+          .where('status', isEqualTo: 'pending')
+          .where('scheduledAt', isLessThanOrEqualTo: now)
+          .orderBy('scheduledAt')
+          .limit(1)
+          .get();
+
+      if (cbQuery.docs.isEmpty) return null;
+
+      final cbDoc = cbQuery.docs.first;
+
+      // 2. Lock the callback doc.
+      await cbDoc.reference.update({
+        'status': 'locked',
+        'assignedTo': callerId,
+        'lockedAt': FieldValue.serverTimestamp(),
+      });
+
+      // 3. Fetch the originating lead.
+      final leadId = cbDoc.data()['leadId'] as String? ?? '';
+      if (leadId.isEmpty) return null;
+
+      final leadDoc = await FirestoreService.leadsCol(tenantId).doc(leadId).get();
+      if (!leadDoc.exists) return null;
+
+      // 4. Return lead data merged with the callback document ID.
+      return {
+        'id': leadDoc.id,
+        'callbackId': cbDoc.id,
+        ...leadDoc.data() as Map<String, dynamic>,
+      };
+    }
+
+    // ── Cold-caller path: raw leads queue (unchanged) ─────────────────────
     // 1. Query the first raw lead for this campaign, oldest first.
     final query = await FirestoreService.leadsCol(tenantId)
         .where('campaignId', isEqualTo: campaignId)
@@ -36,14 +81,65 @@ class LeadService {
   static Future<void> submitDisposition(
       String tenantId,
       String leadId,
-      Map<String, dynamic> data) async {
-    return FirestoreService.leadsCol(tenantId)
-        .doc(leadId)
-        .update({
-          ...data,
-          'status': 'disposed',
-          'updatedAt': FieldValue.serverTimestamp(),
+      Map<String, dynamic> data,
+      String dispositionType,
+      Map<String, dynamic> extraData) async {
+    final db = FirebaseFirestore.instance;
+    final leadRef = FirestoreService.leadsCol(tenantId).doc(leadId);
+
+    if (dispositionType == 'retry') {
+      // ── Retry: reset lead to raw with a future retryAfter timestamp ──────
+      final minutes = (extraData['retryMinutes'] as num?)?.toInt() ?? 30;
+      await leadRef.update({
+        ...data,
+        'status': 'raw',
+        'assignedTo': '',
+        'retryAfter': Timestamp.fromDate(
+            DateTime.now().add(Duration(minutes: minutes))),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
+    // For all other types: mark lead as disposed first.
+    await leadRef.update({
+      ...data,
+      'status': 'disposed',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (dispositionType == 'callback') {
+      // ── Callback: schedule a new callback doc ─────────────────────────────
+      await db
+          .collection('tenants')
+          .doc(tenantId)
+          .collection('callbacks')
+          .add({
+        'leadId': leadId,
+        'phone': extraData['phone'] ?? '',
+        'campaignId': extraData['campaignId'] ?? '',
+        'scheduledAt': extraData['scheduledAt'],
+        'status': 'pending',
+        'assignedTo': '',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } else if (dispositionType == 'dnc') {
+      // ── DNC: write to suppression list keyed by phone number ──────────────
+      final phone = extraData['phone'] as String? ?? '';
+      if (phone.isNotEmpty) {
+        await db
+            .collection('tenants')
+            .doc(tenantId)
+            .collection('suppression_list')
+            .doc(phone)
+            .set({
+          'addedBy': extraData['addedBy'] ?? '',
+          'reason': 'DNC',
+          'timestamp': FieldValue.serverTimestamp(),
         });
+      }
+    }
+    // 'convert', 'close', 'info' → no extra action needed.
   }
 
   // Get leads for audit (manager)

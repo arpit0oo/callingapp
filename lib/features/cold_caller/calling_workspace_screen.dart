@@ -63,6 +63,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
 
   // ── Disposition state ─────────────────────────────────────────
   String? _selectedDisposition;
+  /// Behavior type value read from disposition_config ('close', 'retry', etc.).
+  String _selectedDispositionType = 'close';
   /// True when the selected disposition's requiresNote == true.
   bool _selectedDispositionRequiresNote = false;
   /// True when the selected disposition's requiresCallback == true.
@@ -159,6 +161,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       _invalidFieldIds.clear();
       _notesCtrl.clear();
       _selectedDisposition = null;
+      _selectedDispositionType = 'close';
       _selectedDispositionRequiresNote = false;
       _selectedDispositionRequiresCallback = false;
       _notesError = false;
@@ -166,6 +169,37 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       _cbTime = null;
       _seconds = 0;
     });
+  }
+
+  /// Converts _cbDate (e.g. 'Today', 'Tomorrow') and _cbTime (e.g. '09:00 AM')
+  /// into a Firestore [Timestamp]. Falls back to now + 1 hour when either is absent.
+  Timestamp _buildScheduledAtTimestamp() {
+    if (_cbDate == null || _cbTime == null) {
+      return Timestamp.fromDate(DateTime.now().add(const Duration(hours: 1)));
+    }
+    try {
+      final now = DateTime.now();
+      final daysOffset = {
+        'Today': 0,
+        'Tomorrow': 1,
+        'In 2 days': 2,
+        'In 3 days': 3,
+      }[_cbDate] ?? 0;
+      final baseDate = DateTime(now.year, now.month, now.day + daysOffset);
+
+      // Parse time string like '09:00 AM' or '14:00'
+      final timeParts = _cbTime!.replaceAll(' AM', '').replaceAll(' PM', '').split(':');
+      int hour = int.parse(timeParts[0]);
+      final minute = timeParts.length > 1 ? int.parse(timeParts[1]) : 0;
+      if (_cbTime!.contains('PM') && hour != 12) hour += 12;
+      if (_cbTime!.contains('AM') && hour == 12) hour = 0;
+
+      final scheduled = DateTime(
+          baseDate.year, baseDate.month, baseDate.day, hour, minute);
+      return Timestamp.fromDate(scheduled);
+    } catch (_) {
+      return Timestamp.fromDate(DateTime.now().add(const Duration(hours: 1)));
+    }
   }
 
   Future<void> _submit() async {
@@ -230,6 +264,14 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
             'dispositionLabel': _selectedDisposition,
             'notes': _notesCtrl.text.trim(),
             'formData': Map<String, dynamic>.from(_formData),
+          },
+          _selectedDispositionType,
+          {
+            'phone': widget.currentLead?['phone']?.toString() ?? '',
+            'campaignId': AppSession.campaignId,
+            'addedBy': AppSession.userId,
+            'scheduledAt': _buildScheduledAtTimestamp(),
+            'retryMinutes': 30,
           },
         );
       }
@@ -917,8 +959,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                           data['requiresNote'] as bool? ?? false;
                       final requiresCallback =
                           data['requiresCallback'] as bool? ?? false;
+                      final dispositionType =
+                          data['type'] as String? ?? 'close';
                       setState(() {
                         _selectedDisposition = label;
+                        _selectedDispositionType = dispositionType;
                         _selectedDispositionRequiresNote = requiresNote;
                         _selectedDispositionRequiresCallback = requiresCallback;
                         // Clear notes error when disposition changes

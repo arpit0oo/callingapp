@@ -36,11 +36,13 @@ class _Disposition {
     required this.color,
     this.requiresNote = false,
     this.callback = false,
+    this.type = 'close',
   });
   final String label;
   final Color color;
   bool requiresNote;
   bool callback;
+  String type;
 }
 
 // ─────────────────────────────────────────────
@@ -69,6 +71,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
   bool _showAddForm = false;
   final _newLabelCtrl = TextEditingController();
   Color _newColor = _kGreen;
+  String _newType = 'close';
 
   // Retry Logic
   int _maxRetries = 3;
@@ -138,6 +141,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
           color: Color(colorVal),
           requiresNote: d['requiresNote'] as bool? ?? false,
           callback: d['requiresCallback'] as bool? ?? false,
+          type: d['type'] as String? ?? 'close',
         );
       }).toList();
       setState(() => _dispositions = loaded);
@@ -165,14 +169,21 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
       'updatedAt':       FieldValue.serverTimestamp(),
     });
 
-    // Batch-write dispositions to disposition_config subcollection
-    final batch = db.batch();
+    // Batch-write dispositions to disposition_config subcollection.
+    // First delete all existing docs so removed dispositions are fully cleared.
     final dispCol = db
         .collection('tenants')
         .doc(tenantId)
         .collection('campaigns')
         .doc(campaignId)
         .collection('disposition_config');
+
+    final existing = await dispCol.get();
+    final batch = db.batch();
+
+    for (final doc in existing.docs) {
+      batch.delete(doc.reference);
+    }
 
     for (int i = 0; i < _dispositions.length; i++) {
       final disp = _dispositions[i];
@@ -182,6 +193,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
         'color':            disp.color.value,
         'requiresNote':     disp.requiresNote,
         'requiresCallback': disp.callback,
+        'type':             disp.type,
         'order':            i,
       });
     }
@@ -243,17 +255,21 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
               showAddForm: _showAddForm,
               newLabelCtrl: _newLabelCtrl,
               newColor: _newColor,
+              newType: _newType,
               availableColors: _dotColors,
               onAddTap: () => setState(() => _showAddForm = !_showAddForm),
               onColorPick: (c) => setState(() => _newColor = c),
+              onTypePick: (t) => setState(() => _newType = t),
               onAddConfirm: () {
                 if (_newLabelCtrl.text.trim().isNotEmpty) {
                   setState(() {
                     _dispositions.add(_Disposition(
                       label: _newLabelCtrl.text.trim(),
                       color: _newColor,
+                      type: _newType,
                     ));
                     _newLabelCtrl.clear();
+                    _newType = 'close';
                     _showAddForm = false;
                   });
                 }
@@ -308,9 +324,11 @@ class _DispositionCard extends StatelessWidget {
     required this.showAddForm,
     required this.newLabelCtrl,
     required this.newColor,
+    required this.newType,
     required this.availableColors,
     required this.onAddTap,
     required this.onColorPick,
+    required this.onTypePick,
     required this.onAddConfirm,
     required this.onToggleNote,
     required this.onToggleCallback,
@@ -322,9 +340,11 @@ class _DispositionCard extends StatelessWidget {
   final bool showAddForm;
   final TextEditingController newLabelCtrl;
   final Color newColor;
+  final String newType;
   final List<Color> availableColors;
   final VoidCallback onAddTap;
   final ValueChanged<Color> onColorPick;
+  final ValueChanged<String> onTypePick;
   final VoidCallback onAddConfirm;
   final ValueChanged<int> onToggleNote;
   final ValueChanged<int> onToggleCallback;
@@ -426,6 +446,38 @@ class _DispositionCard extends StatelessWidget {
                   ),
                   onPressed: onAddConfirm,
                   child: Text('Add', style: _inter(12, weight: FontWeight.w600, color: Colors.white)),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              Row(children: [
+                Text('Behavior: ', style: _inter(12, color: _kTextLight)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _kBgPage,
+                      border: Border.all(color: _kBorder),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: newType,
+                        isExpanded: true,
+                        style: _inter(13),
+                        icon: const Icon(Icons.keyboard_arrow_down, size: 18, color: _kTextLight),
+                        onChanged: (v) { if (v != null) onTypePick(v); },
+                        items: const [
+                          DropdownMenuItem(value: 'convert',  child: Text('Convert — Marks lead as successfully converted')),
+                          DropdownMenuItem(value: 'callback', child: Text('Callback — Queues lead for warm caller follow-up')),
+                          DropdownMenuItem(value: 'retry',    child: Text('Retry — Re-queues lead for cold caller after delay')),
+                          DropdownMenuItem(value: 'dnc',      child: Text('DNC — Blacklists number permanently')),
+                          DropdownMenuItem(value: 'close',    child: Text('Close — Permanently closes lead, no re-queue')),
+                          DropdownMenuItem(value: 'info',     child: Text('Info — Records info only, no action taken')),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ]),
             ]),

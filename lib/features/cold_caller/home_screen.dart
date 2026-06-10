@@ -610,6 +610,7 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
         AppSession.tenantId,
         AppSession.campaignId,
         AppSession.userId,
+        role: AppSession.role,
       );
 
       if (!mounted) return;
