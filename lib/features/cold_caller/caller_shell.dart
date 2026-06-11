@@ -111,8 +111,9 @@ class CallerShellState extends State<CallerShell> {
                   ),
                 ),
 
-                // ── Bottom navigation bar ─────────────────────────
-                _buildBottomNav(),
+                // ── Bottom navigation bar — hidden on Dashboard/Workspace ──
+                if (_selectedIndex == 0 || _selectedIndex == 3)
+                  _buildBottomNav(),
               ],
             ),
           ),
