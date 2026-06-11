@@ -65,7 +65,12 @@ class CallerShellState extends State<CallerShell> {
   static const _unselectedColor = Color(0xFF9AA0A6);
 
   /// Programmatically switch to any tab by index.
-  void navigateTo(int index) => setState(() => _selectedIndex = index);
+  void navigateTo(int index) {
+    setState(() => _selectedIndex = index);
+    if (index == 1) {
+      CallingDashboardContent.dashboardKey.currentState?.restartSession();
+    }
+  }
 
   // ── Nav-bar items (visible tabs only — Workspace is hidden) ──
   // Each entry pairs the display data with the IndexedStack index it targets.

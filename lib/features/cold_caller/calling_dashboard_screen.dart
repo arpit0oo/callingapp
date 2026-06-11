@@ -46,7 +46,7 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
   static const _bg            = Color(0xFFF8F9FA);
 
   // ── Session timer ─────────────────────────────────────────────
-  final DateTime _sessionStart = DateTime.now();
+  DateTime _sessionStart = DateTime.now();
   Timer? _sessionTimer;
   String _sessionLabel = '00:00';
 
@@ -70,6 +70,7 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
   @override
   void initState() {
     super.initState();
+    _sessionStart = DateTime.now();
     _startSessionTimer();
     _writeSessionStart();
   }
@@ -78,6 +79,19 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
   void dispose() {
     _sessionTimer?.cancel();
     super.dispose();
+  }
+
+  void restartSession() {
+    _sessionTimer?.cancel();
+    setState(() {
+      _sessionStart = DateTime.now();
+      _sessionLabel = '00:00';
+      _callsMadeThisSession = 0;
+      _lastActiveAt = DateTime.now();
+      _showIdleWarning = false;
+    });
+    _startSessionTimer();
+    _writeSessionStart();
   }
 
   // ── Write RTDB on session open ────────────────────────────────
@@ -266,8 +280,19 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
 
     if (confirmed != true || !mounted) return;
 
+    _sessionTimer?.cancel();
+
     setState(() => _stopping = true);
     await _writeSessionRecord(reason: 'manual');
+    if (!mounted) return;
+    await RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'on_shift',
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
     if (!mounted) return;
     setState(() => _stopping = false);
     CallerShell.shellKey.currentState?.navigateTo(0);

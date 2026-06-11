@@ -36,9 +36,9 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
 
   String _formatDuration(Duration d) {
     final h = d.inHours;
-    final m = d.inMinutes.remainder(60);
-    if (h > 0) return '${h}h ${m}m';
-    return '${m}m';
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '${h}h ${m}m ${s}s';
   }
 
   Future<void> _initShiftTimer() async {
@@ -54,7 +54,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
         setState(() {
           _shiftDuration = _formatDuration(DateTime.now().difference(started));
         });
-        _shiftTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+        _shiftTimer = Timer.periodic(const Duration(seconds: 1), (_) {
           if (mounted) {
             setState(() {
               _shiftDuration =
