@@ -1,0 +1,793 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+import '../../services/app_session.dart';
+import '../../services/lead_service.dart';
+import '../../services/rtdb_service.dart';
+import 'caller_shell.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Calling Session Dashboard
+// ─────────────────────────────────────────────────────────────────────────────
+
+class CallingDashboardContent extends StatefulWidget {
+  const CallingDashboardContent({
+    super.key,
+    required this.role,
+  });
+
+  /// "cold" = raw-lead caller, "warm" = callback caller.
+  final String role;
+
+  @override
+  State<CallingDashboardContent> createState() =>
+      _CallingDashboardContentState();
+}
+
+class _CallingDashboardContentState extends State<CallingDashboardContent> {
+  // ── Colors ────────────────────────────────────────────────────
+  static const _primary     = Color(0xFF1A73E8);
+  static const _primaryDark = Color(0xFF1557B0);
+  static const _green       = Color(0xFF34A853);
+  static const _red         = Color(0xFFD93025);
+  static const _orange      = Color(0xFFFA7B17);
+  static const _textPrimary   = Color(0xFF202124);
+  static const _textSecondary = Color(0xFF5F6368);
+  static const _textHint      = Color(0xFF9AA0A6);
+  static const _border        = Color(0xFFE8EAED);
+  static const _bg            = Color(0xFFF8F9FA);
+
+  // ── Session timer ─────────────────────────────────────────────
+  final DateTime _sessionStart = DateTime.now();
+  Timer? _sessionTimer;
+  String _sessionLabel = '00:00';
+
+  // ── Idle detection ────────────────────────────────────────────
+  /// Timestamp of the last time the caller had an active lead.
+  DateTime _lastActiveAt = DateTime.now();
+  static const _warnAfter = Duration(minutes: 3);
+  static const _stopAfter = Duration(minutes: 4);
+  bool _showIdleWarning = false;
+
+  // ── Session stats ─────────────────────────────────────────────
+  int _callsMadeThisSession = 0;
+
+  // ── Current lead ──────────────────────────────────────────────
+  Map<String, dynamic>? _currentLead;
+  bool _fetchingLead = false;
+
+  // ── Stop state ────────────────────────────────────────────────
+  bool _stopping = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startSessionTimer();
+    _writeSessionStart();
+  }
+
+  @override
+  void dispose() {
+    _sessionTimer?.cancel();
+    super.dispose();
+  }
+
+  // ── Write RTDB on session open ────────────────────────────────
+  Future<void> _writeSessionStart() async {
+    await RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'in_session',
+        'sessionStarted': ServerValue.timestamp,
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
+  }
+
+  // ── Session timer ─────────────────────────────────────────────
+  void _startSessionTimer() {
+    _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      final elapsed = DateTime.now().difference(_sessionStart);
+      final m = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
+      final s = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
+      final idle = DateTime.now().difference(_lastActiveAt);
+
+      setState(() {
+        _sessionLabel = elapsed.inHours > 0
+            ? '${elapsed.inHours}:$m:$s'
+            : '$m:$s';
+
+        if (_currentLead == null) {
+          _showIdleWarning = idle >= _warnAfter;
+          if (idle >= _stopAfter) {
+            _autoStopSession();
+          }
+        } else {
+          _showIdleWarning = false;
+        }
+      });
+    });
+  }
+
+  // ── Auto-stop on idle timeout ─────────────────────────────────
+  Future<void> _autoStopSession() async {
+    _sessionTimer?.cancel();
+    await _writeSessionRecord(reason: 'idle_timeout');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Session ended — idle for 4 minutes.'),
+        backgroundColor: _orange,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    CallerShell.shellKey.currentState?.navigateTo(0);
+  }
+
+  // ── Get Next Lead ─────────────────────────────────────────────
+  Future<void> _handleGetNextLead() async {
+    if (_fetchingLead) return;
+    if (AppSession.campaignId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No campaign assigned. Contact your manager.')),
+      );
+      return;
+    }
+
+    setState(() => _fetchingLead = true);
+    try {
+      final lead = await LeadService.getNextLead(
+        AppSession.tenantId,
+        AppSession.campaignId,
+        AppSession.userId,
+        role: AppSession.role,
+      );
+      if (!mounted) return;
+
+      if (lead != null) {
+        final leadId = lead['id']?.toString() ?? '';
+        await RtdbService.updateCallerState(
+          AppSession.tenantId,
+          AppSession.userId,
+          {
+            'status': 'calling',
+            'currentLeadId': leadId,
+            'lastSeen': ServerValue.timestamp,
+          },
+        );
+        if (!mounted) return;
+        setState(() {
+          _currentLead = lead;
+          _showIdleWarning = false;
+        });
+        // Also hand the lead to CallerShell so workspace is ready.
+        CallerShell.shellKey.currentState?.setCurrentLead(lead);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No leads available in queue.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _fetchingLead = false);
+    }
+  }
+
+  // ── Open Workspace with current lead ─────────────────────────
+  void _handleOpenWorkspace() {
+    if (_currentLead == null) return;
+    CallerShell.shellKey.currentState?.setCurrentLead(_currentLead);
+    CallerShell.shellKey.currentState?.navigateTo(1);
+  }
+
+  // ── Called by workspace when a lead is disposed ───────────────
+  void onLeadDisposed() {
+    setState(() {
+      _currentLead = null;
+      _callsMadeThisSession++;
+      _lastActiveAt = DateTime.now();
+    });
+    RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'in_session',
+        'currentLeadId': '',
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
+  }
+
+  // ── Stop Calling ──────────────────────────────────────────────
+  Future<void> _handleStopCalling() async {
+    if (_currentLead != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please submit the current lead before stopping.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Stop Calling?',
+            style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 17,
+                color: _textPrimary)),
+        content: Text(
+          'This will end your calling session and save your progress.',
+          style: GoogleFonts.inter(fontSize: 14, color: _textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600,
+                    color: _textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Stop Calling',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w700,
+                    color: _red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _stopping = true);
+    await _writeSessionRecord(reason: 'manual');
+    if (!mounted) return;
+    setState(() => _stopping = false);
+    CallerShell.shellKey.currentState?.navigateTo(0);
+  }
+
+  // ── Write session record to Firestore ─────────────────────────
+  Future<void> _writeSessionRecord({required String reason}) async {
+    final now = DateTime.now();
+    final dateKey =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    final docId = '${AppSession.userId}_$dateKey';
+
+    final elapsed = now.difference(_sessionStart);
+
+    await FirebaseFirestore.instance
+        .collection('caller_activity')
+        .doc(docId)
+        .set({
+      'userId': AppSession.userId,
+      'tenantId': AppSession.tenantId,
+      'campaignId': AppSession.campaignId,
+      'sessionStart': Timestamp.fromDate(_sessionStart),
+      'sessionEnd': FieldValue.serverTimestamp(),
+      'durationSeconds': elapsed.inSeconds,
+      'callsMade': _callsMadeThisSession,
+      'stopReason': reason,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'idle',
+        'currentLeadId': '',
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _buildTopBar(),
+        Expanded(
+          child: Container(
+            color: _bg,
+            child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_showIdleWarning) ...[
+                    _buildIdleWarning(),
+                    const SizedBox(height: 16),
+                  ],
+                  _buildStatsRow(),
+                  const SizedBox(height: 20),
+                  _buildActionCard(),
+                  const SizedBox(height: 20),
+                  if (_currentLead != null) _buildLockedLeadCard(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Top bar ───────────────────────────────────────────────────
+  Widget _buildTopBar() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [_primary, _primaryDark],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 52, 16, 16),
+      child: Row(
+        children: [
+          // Session timer
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.timer_outlined, size: 14, color: Colors.white),
+                const SizedBox(width: 5),
+                Text(
+                  _sessionLabel,
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          // Title
+          Text(
+            'Calling Session',
+            style: GoogleFonts.inter(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+          const Spacer(),
+          // Stop button
+          _stopping
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2))
+              : OutlinedButton(
+                  onPressed: _handleStopCalling,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white70, width: 1.2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
+                  ),
+                  child: Text(
+                    'Stop',
+                    style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white),
+                  ),
+                ),
+        ],
+      ),
+    );
+  }
+
+  // ── Idle warning banner ───────────────────────────────────────
+  Widget _buildIdleWarning() {
+    final idle = DateTime.now().difference(_lastActiveAt);
+    final remaining = _stopAfter - idle;
+    final remSec = remaining.inSeconds.clamp(0, 60);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: _orange.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _orange.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: _orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'You\'ve been idle for a while. Session auto-stops in ${remSec}s.',
+              style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: _orange),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Stats row ─────────────────────────────────────────────────
+  Widget _buildStatsRow() {
+    final campaignLabel = AppSession.campaignName.isNotEmpty
+        ? AppSession.campaignName
+        : AppSession.campaignId.isNotEmpty
+            ? AppSession.campaignId
+            : 'No Campaign';
+
+    return Row(
+      children: [
+        Expanded(
+          child: _StatCard(
+            icon: Icons.call_outlined,
+            iconColor: _primary,
+            value: '$_callsMadeThisSession',
+            label: 'Calls This Session',
+          ),
+        ),
+        const SizedBox(width: 12),
+        // Queue count from Firestore stats/summary
+        Expanded(
+          child: StreamBuilder<DocumentSnapshot>(
+            stream: AppSession.campaignId.isEmpty
+                ? null
+                : FirebaseFirestore.instance
+                    .collection('tenants')
+                    .doc(AppSession.tenantId)
+                    .collection('campaigns')
+                    .doc(AppSession.campaignId)
+                    .collection('stats')
+                    .doc('summary')
+                    .snapshots(),
+            builder: (context, snap) {
+              String queueVal = '—';
+              if (snap.hasData && snap.data!.exists) {
+                final data = snap.data!.data() as Map<String, dynamic>? ?? {};
+                final q = data['queueRemaining'];
+                if (q != null) queueVal = '$q';
+              }
+              return _StatCard(
+                icon: Icons.queue_outlined,
+                iconColor: _green,
+                value: queueVal,
+                label: 'Queue Remaining',
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _StatCard(
+            icon: Icons.campaign_outlined,
+            iconColor: _orange,
+            value: campaignLabel,
+            label: 'Campaign',
+            isText: true,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Action card (Get Next Lead / locked state) ────────────────
+  Widget _buildActionCard() {
+    if (_currentLead != null) {
+      // Lead already locked — show Open Workspace button
+      return _buildOpenWorkspaceButton();
+    }
+    return _GetNextLeadButton(
+      role: widget.role,
+      loading: _fetchingLead,
+      onTap: _handleGetNextLead,
+    );
+  }
+
+  // ── Locked lead card ──────────────────────────────────────────
+  Widget _buildLockedLeadCard() {
+    final phone = _currentLead?['phone']?.toString() ?? '—';
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    final initials = digits.length >= 2
+        ? digits.substring(digits.length - 2)
+        : (digits.isNotEmpty ? digits : '?');
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 12,
+                height: 12,
+                decoration: const BoxDecoration(
+                  color: _green,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Lead Locked',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _green,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: const BoxDecoration(
+                  color: _primary,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  initials,
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      phone,
+                      style: GoogleFonts.inter(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: _textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      AppSession.campaignName.isNotEmpty
+                          ? AppSession.campaignName
+                          : 'Campaign',
+                      style: GoogleFonts.inter(
+                          fontSize: 12, color: _textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Open Workspace button ─────────────────────────────────────
+  Widget _buildOpenWorkspaceButton() {
+    return GestureDetector(
+      onTap: _handleOpenWorkspace,
+      child: Container(
+        height: 56,
+        decoration: BoxDecoration(
+          color: _green,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: _green.withOpacity(0.25),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.open_in_new_rounded,
+                size: 20, color: Colors.white),
+            const SizedBox(width: 8),
+            Text(
+              'Open Workspace →',
+              style: GoogleFonts.inter(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Get Next Lead button
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _GetNextLeadButton extends StatefulWidget {
+  const _GetNextLeadButton({
+    required this.role,
+    required this.loading,
+    required this.onTap,
+  });
+
+  final String role;
+  final bool loading;
+  final VoidCallback onTap;
+
+  @override
+  State<_GetNextLeadButton> createState() => _GetNextLeadButtonState();
+}
+
+class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  static const _primary     = Color(0xFF1A73E8);
+  static const _primaryDark = Color(0xFF1557B0);
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: widget.loading
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTap: widget.loading ? null : widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          height: 56,
+          decoration: BoxDecoration(
+            color: _pressed
+                ? _primaryDark
+                : _hovered
+                    ? const Color(0xFF1669D0)
+                    : _primary,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              if (!widget.loading)
+                BoxShadow(
+                  color: _primary.withOpacity(_hovered ? 0.35 : 0.20),
+                  blurRadius: _hovered ? 16 : 8,
+                  offset: const Offset(0, 4),
+                ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: widget.loading
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2.5),
+                )
+              : Text(
+                  widget.role == 'warm'
+                      ? 'Get Next Callback →'
+                      : 'Get Next Lead →',
+                  style: GoogleFonts.inter(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stat card
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({
+    required this.icon,
+    required this.iconColor,
+    required this.value,
+    required this.label,
+    this.isText = false,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String value;
+  final String label;
+  /// When true, renders [value] as smaller text (for long strings like campaign name).
+  final bool isText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.07),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: iconColor, size: 20),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.inter(
+              fontSize: isText ? 12 : 22,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFF202124),
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              color: const Color(0xFF9AA0A6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

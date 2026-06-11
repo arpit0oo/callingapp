@@ -6,21 +6,17 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
-import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
 import '../../shared/widgets/recent_call_row.dart';
 import '../auth/login_screen.dart';
 import 'caller_shell.dart';
 
-/// Home screen for Cold Caller (role="cold") and Warm Caller (role="warm").
+/// Home screen for Cold Caller (role="cold_caller") and Warm Caller (role="warm_caller").
 /// Designed as a mobile-first layout, max width 420 px.
 class CallerHomeContent extends StatefulWidget {
-  const CallerHomeContent({
-    super.key,
-    required this.role,
-  });
+  const CallerHomeContent({super.key, required this.role});
 
-  /// "cold" = raw-lead caller, "warm" = callback caller.
+  /// "cold_caller" = raw-lead caller, "warm_caller" = callback caller.
   final String role;
 
   @override
@@ -29,26 +25,10 @@ class CallerHomeContent extends StatefulWidget {
 
 class _CallerHomeContentState extends State<CallerHomeContent> {
   // ── Colors ────────────────────────────────────────────────────
-  static const _primary = Color(0xFF1A73E8);
-  static const _primaryDark = Color(0xFF1557B0);
-  static const _textPrimary = Color(0xFF202124);
-  static const _textSecondary = Color(0xFF5F6368);
-  static const _textHint = Color(0xFF9AA0A6);
-
-  // ── Recent calls future ─────────────────────────────────────
-  Future<QuerySnapshot>? _recentCallsFuture;
-
-  void _fetchRecentCalls() {
-    _recentCallsFuture = FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(AppSession.tenantId)
-        .collection('leads')
-        .where('assignedTo', isEqualTo: AppSession.userId)
-        .where('status', isEqualTo: 'disposed')
-        .orderBy('updatedAt', descending: true)
-        .limit(5)
-        .get();
-  }
+  static const _primary      = Color(0xFF1A73E8);
+  static const _primaryDark  = Color(0xFF1557B0);
+  static const _textPrimary  = Color(0xFF202124);
+  static const _textHint     = Color(0xFF9AA0A6);
 
   // ── Shift timer ───────────────────────────────────────────────
   Timer? _shiftTimer;
@@ -63,9 +43,9 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
 
   Future<void> _initShiftTimer() async {
     try {
-      final ref = FirebaseDatabase.instance
-          .ref('caller_state/${AppSession.tenantId}/${AppSession.userId}');
-      final snap = await ref.get();
+      final snap = await FirebaseDatabase.instance
+          .ref('caller_state/${AppSession.tenantId}/${AppSession.userId}')
+          .get();
       if (!mounted) return;
       final data = snap.value as Map<dynamic, dynamic>?;
       final startedMs = data?['shiftStarted'] as int?;
@@ -91,7 +71,6 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   @override
   void initState() {
     super.initState();
-    _fetchRecentCalls();
     _initShiftTimer();
   }
 
@@ -101,47 +80,48 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     super.dispose();
   }
 
-  // ── End Shift ─────────────────────────────────────────────────
+  // ── Start Calling ─────────────────────────────────────────────
+  Future<void> _handleStartCalling() async {
+    await RtdbService.updateCallerState(
+      AppSession.tenantId,
+      AppSession.userId,
+      {
+        'status': 'in_session',
+        'sessionStarted': ServerValue.timestamp,
+        'lastSeen': ServerValue.timestamp,
+      },
+    );
+    if (!mounted) return;
+    CallerShell.shellKey.currentState?.navigateTo(1);
+  }
 
+  // ── End Shift ─────────────────────────────────────────────────
   Future<void> _handleEndShift() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(
-          'End Shift?',
-          style: GoogleFonts.inter(
-            fontWeight: FontWeight.w700,
-            fontSize: 17,
-            color: const Color(0xFF202124),
-          ),
-        ),
-        content: Text(
-          'Are you sure you want to end your shift?',
-          style: GoogleFonts.inter(
-            fontSize: 14,
-            color: const Color(0xFF5F6368),
-          ),
-        ),
+        title: Text('End Shift?',
+            style: GoogleFonts.inter(
+                fontWeight: FontWeight.w700,
+                fontSize: 17,
+                color: const Color(0xFF202124))),
+        content: Text('Are you sure you want to end your shift?',
+            style: GoogleFonts.inter(
+                fontSize: 14, color: const Color(0xFF5F6368))),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(
-              'Cancel',
-              style: GoogleFonts.inter(
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF5F6368),
-              ),
-            ),
+            child: Text('Cancel',
+                style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF5F6368))),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(
-              'End Shift',
-              style: GoogleFonts.inter(
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFFD93025),
-              ),
-            ),
+            child: Text('End Shift',
+                style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFFD93025))),
           ),
         ],
       ),
@@ -152,10 +132,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     await RtdbService.updateCallerState(
       AppSession.tenantId,
       AppSession.userId,
-      {
-        'status': 'offline',
-        'lastSeen': ServerValue.timestamp,
-      },
+      {'status': 'offline', 'lastSeen': ServerValue.timestamp},
     );
 
     if (!mounted) return;
@@ -166,6 +143,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     );
   }
 
+  // ── Build ──────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -173,21 +151,13 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ── Blue gradient header ───────────────────────────────
           _buildHeader(),
-
-          // ── KPI cards ─────────────────────────────────────────
           const SizedBox(height: 20),
           _buildKpiSection(),
-
-          // ── Get Next Lead button ───────────────────────────────
           const SizedBox(height: 24),
-          _buildGetNextLead(),
-
-          // ── Recent calls ──────────────────────────────────────
+          _buildStartCallingSection(),
           const SizedBox(height: 24),
           _buildRecentCalls(),
-
           const SizedBox(height: 32),
         ],
       ),
@@ -195,7 +165,6 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   }
 
   // ── Header ────────────────────────────────────────────────────
-
   Widget _buildHeader() {
     return Container(
       decoration: const BoxDecoration(
@@ -209,75 +178,59 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Greeting
           Text(
             'Good Morning, ${AppSession.name.isNotEmpty ? AppSession.name : AppSession.userId} 👋',
             style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-            ),
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: Colors.white),
           ),
           const SizedBox(height: 4),
-
-          // Campaign subtitle
           Text(
-            widget.role == 'warm'
+            widget.role == 'warm_caller'
                 ? 'Callbacks — Xpert Tutor'
                 : 'Xpert Tutor Campaign',
             style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w400,
-              color: Colors.white.withOpacity(0.85),
-            ),
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+                color: Colors.white.withOpacity(0.85)),
           ),
           const SizedBox(height: 16),
-
-          // Shift status row
           Row(
             children: [
-              // Green dot
               Container(
                 width: 8,
                 height: 8,
                 decoration: const BoxDecoration(
-                  color: Color(0xFF34A853),
-                  shape: BoxShape.circle,
-                ),
+                    color: Color(0xFF34A853), shape: BoxShape.circle),
               ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   'Shift Active${_shiftDuration.isNotEmpty ? ' — $_shiftDuration' : ''}',
                   style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white,
-                  ),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white),
                 ),
               ),
-              // End Shift button
               OutlinedButton(
                 onPressed: _handleEndShift,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white,
                   side: const BorderSide(color: Colors.white70, width: 1.2),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
+                      borderRadius: BorderRadius.circular(20)),
                 ),
-                child: Text(
-                  'End Shift',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
+                child: Text('End Shift',
+                    style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white)),
               ),
             ],
           ),
@@ -286,24 +239,22 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     );
   }
 
-  // ── KPI cards ─────────────────────────────────────────────────
-
+  // ── KPI section ───────────────────────────────────────────────
+  // Reads callsMade, converted, callbacks from caller_stats/{userId}.
   Widget _buildKpiSection() {
-    return StreamBuilder<QuerySnapshot>(
+    return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('tenants')
           .doc(AppSession.tenantId)
-          .collection('leads')
-          .where('assignedTo', isEqualTo: AppSession.userId)
+          .collection('caller_stats')
+          .doc(AppSession.userId)
           .snapshots(),
       builder: (context, snapshot) {
-        int callsMade = 0;
-        if (snapshot.hasData) {
-          callsMade = snapshot.data!.docs.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            return data['status'] == 'disposed';
-          }).length;
-        }
+        final data =
+            (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
+        final callsMade   = (data['callsMade']  as num?)?.toInt() ?? 0;
+        final converted   = (data['converted']  as num?)?.toInt() ?? 0;
+        final callbacks   = (data['callbacks']  as num?)?.toInt() ?? 0;
 
         return SizedBox(
           height: 112,
@@ -312,25 +263,22 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             children: [
               _KpiCard(
-                icon: Icons.call_outlined,
-                iconColor: const Color(0xFF1A73E8),
-                value: callsMade.toString(),
-                label: 'Calls Made',
-              ),
+                  icon: Icons.call_outlined,
+                  iconColor: const Color(0xFF1A73E8),
+                  value: '$callsMade',
+                  label: 'Calls Made'),
               const SizedBox(width: 12),
-              const _KpiCard(
-                icon: Icons.person_add_outlined,
-                iconColor: Color(0xFF34A853),
-                value: '0',
-                label: 'Leads Generated',
-              ),
+              _KpiCard(
+                  icon: Icons.person_add_outlined,
+                  iconColor: const Color(0xFF34A853),
+                  value: '$converted',
+                  label: 'Leads Generated'),
               const SizedBox(width: 12),
-              const _KpiCard(
-                icon: Icons.event_outlined,
-                iconColor: Color(0xFFFBBC04),
-                value: '0',
-                label: 'Callbacks Scheduled',
-              ),
+              _KpiCard(
+                  icon: Icons.event_outlined,
+                  iconColor: const Color(0xFFFBBC04),
+                  value: '$callbacks',
+                  label: 'Callbacks Scheduled'),
               const SizedBox(width: 16),
             ],
           ),
@@ -339,47 +287,45 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     );
   }
 
-  // ── Get Next Lead button ───────────────────────────────────────
-
-  Widget _buildGetNextLead() {
+  // ── Start Calling section ─────────────────────────────────────
+  Widget _buildStartCallingSection() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _GetNextLeadButton(
-            role: widget.role,
-          ),
+          _StartCallingButton(
+              role: widget.role, onTap: _handleStartCalling),
           const SizedBox(height: 8),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('tenants')
-                .doc(AppSession.tenantId)
-                .collection('leads')
-                .where('campaignId', isEqualTo: AppSession.campaignId)
-                .where('status', isEqualTo: 'raw')
-                .snapshots(),
+          // Queue count — one-time read from campaigns/{id}/stats/summary
+          FutureBuilder<DocumentSnapshot>(
+            future: AppSession.campaignId.isEmpty
+                ? null
+                : FirebaseFirestore.instance
+                    .collection('tenants')
+                    .doc(AppSession.tenantId)
+                    .collection('campaigns')
+                    .doc(AppSession.campaignId)
+                    .collection('stats')
+                    .doc('summary')
+                    .get(),
             builder: (context, snapshot) {
               if (!snapshot.hasData) {
-                return Text(
-                  '...',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: _textHint,
-                    fontWeight: FontWeight.w400,
-                  ),
-                );
+                return Text('...',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.inter(
+                        fontSize: 13, color: _textHint));
               }
-              final count = snapshot.data!.size;
+              final data =
+                  (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
+              final q = (data['queueRemaining'] as num?)?.toInt() ?? 0;
               return Text(
-                '$count leads remaining in queue',
+                '$q leads remaining in queue',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.inter(
-                  fontSize: 13,
-                  color: _textHint,
-                  fontWeight: FontWeight.w400,
-                ),
+                    fontSize: 13,
+                    color: _textHint,
+                    fontWeight: FontWeight.w400),
               );
             },
           ),
@@ -388,81 +334,66 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     );
   }
 
-  // ── Recent calls ──────────────────────────────────────────────
-
+  // ── Recent Calls ──────────────────────────────────────────────
+  // Reads the recentCalls array from caller_stats/{userId}.
   Widget _buildRecentCalls() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Recent Calls',
-            style: GoogleFonts.inter(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: _textPrimary,
-            ),
-          ),
+          Text('Recent Calls',
+              style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: _textPrimary)),
           const SizedBox(height: 12),
-          FutureBuilder<QuerySnapshot>(
-            future: _recentCallsFuture,
+          StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('tenants')
+                .doc(AppSession.tenantId)
+                .collection('caller_stats')
+                .doc(AppSession.userId)
+                .snapshots(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 16),
                     child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
                   ),
                 );
               }
 
-              final docs = snapshot.data?.docs ?? [];
+              final data =
+                  (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
+              final rawList = data['recentCalls'];
+              final entries = rawList is List
+                  ? rawList.cast<Map<dynamic, dynamic>>()
+                  : <Map<dynamic, dynamic>>[];
 
-              if (docs.isEmpty) {
+              if (entries.isEmpty) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    'No recent calls yet.',
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      color: _textHint,
-                    ),
-                  ),
+                  child: Text('No recent calls yet.',
+                      style: GoogleFonts.inter(
+                          fontSize: 13, color: _textHint)),
                 );
               }
 
               return Column(
-                children: docs.map((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final phone = data['phone']?.toString() ?? '—';
-                  final disposition =
-                      data['dispositionLabel']?.toString() ?? '—';
+                children: entries.take(5).map((raw) {
+                  final entry = Map<String, dynamic>.from(raw);
+                  final phone       = entry['phone']?.toString() ?? '—';
+                  final disposition = entry['disposition']?.toString() ?? '—';
+                  final time        = entry['time']?.toString() ?? '';
 
-                  // Format updatedAt as HH:mm
-                  String time = '';
-                  final updatedAt = data['updatedAt'];
-                  if (updatedAt != null) {
-                    DateTime? dt;
-                    if (updatedAt is Timestamp) {
-                      dt = updatedAt.toDate();
-                    } else if (updatedAt is int) {
-                      dt = DateTime.fromMillisecondsSinceEpoch(updatedAt);
-                    }
-                    if (dt != null) {
-                      time =
-                          '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-                    }
-                  }
-
-                  // Chip colors by disposition
+                  final dl = disposition.toLowerCase();
                   final Color chipBg;
                   final Color chipFg;
-                  final dl = disposition.toLowerCase();
                   if (dl == 'interested') {
                     chipBg = const Color(0xFFE6F4EA);
                     chipFg = const Color(0xFF137333);
@@ -504,6 +435,81 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Start Calling button with hover/press animation
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StartCallingButton extends StatefulWidget {
+  const _StartCallingButton({required this.role, required this.onTap});
+  final String role;
+  final VoidCallback onTap;
+
+  @override
+  State<_StartCallingButton> createState() => _StartCallingButtonState();
+}
+
+class _StartCallingButtonState extends State<_StartCallingButton> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  static const _primary     = Color(0xFF1A73E8);
+  static const _primaryDark = Color(0xFF1557B0);
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTapDown:  (_) => setState(() => _pressed = true),
+        onTapUp:    (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          height: 56,
+          decoration: BoxDecoration(
+            color: _pressed
+                ? _primaryDark
+                : _hovered
+                    ? const Color(0xFF1669D0)
+                    : _primary,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: _primary.withOpacity(_hovered ? 0.35 : 0.20),
+                blurRadius: _hovered ? 16 : 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.phone_in_talk_outlined,
+                  size: 20, color: Colors.white),
+              const SizedBox(width: 10),
+              Text(
+                widget.role == 'warm_caller'
+                    ? 'Start Calling — Callbacks →'
+                    : 'Start Calling →',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // KPI card
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -530,10 +536,9 @@ class _KpiCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.07),
-            blurRadius: 12,
-            offset: const Offset(0, 3),
-          ),
+              color: Colors.black.withOpacity(0.07),
+              blurRadius: 12,
+              offset: const Offset(0, 3)),
         ],
       ),
       child: Column(
@@ -544,23 +549,17 @@ class _KpiCard extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                value,
-                style: GoogleFonts.inter(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF202124),
-                  height: 1.1,
-                ),
-              ),
-              Text(
-                label,
-                style: GoogleFonts.inter(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w400,
-                  color: const Color(0xFF9AA0A6),
-                ),
-              ),
+              Text(value,
+                  style: GoogleFonts.inter(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF202124),
+                      height: 1.1)),
+              Text(label,
+                  style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w400,
+                      color: const Color(0xFF9AA0A6))),
             ],
           ),
         ],
@@ -568,137 +567,3 @@ class _KpiCard extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Get Next Lead button with hover/press animation
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _GetNextLeadButton extends StatefulWidget {
-  const _GetNextLeadButton({
-    required this.role,
-  });
-  final String role;
-
-  @override
-  State<_GetNextLeadButton> createState() => _GetNextLeadButtonState();
-}
-
-class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
-  bool _hovered = false;
-  bool _pressed = false;
-  bool _loading = false;
-
-  static const _primary = Color(0xFF1A73E8);
-  static const _primaryDark = Color(0xFF1557B0);
-
-  Future<void> _handleTap() async {
-    if (_loading) return;
-
-    if (AppSession.campaignId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No campaign assigned. Contact your manager.'),
-        ),
-      );
-      return;
-    }
-
-    setState(() => _loading = true);
-
-    try {
-      final lead = await LeadService.getNextLead(
-        AppSession.tenantId,
-        AppSession.campaignId,
-        AppSession.userId,
-        role: AppSession.role,
-      );
-
-      if (!mounted) return;
-
-      if (lead != null) {
-        final leadId = lead['id']?.toString() ?? '';
-        await RtdbService.updateCallerState(
-          AppSession.tenantId,
-          AppSession.userId,
-          {
-            'status': 'calling',
-            'currentLeadId': leadId,
-            'lastSeen': ServerValue.timestamp,
-          },
-        );
-        if (!mounted) return;
-        CallerShell.shellKey.currentState?.setCurrentLead(lead);
-        CallerShell.shellKey.currentState?.navigateTo(1);
-      } else {
-        // No lead returned
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No leads available in queue')),
-        );
-      }
-    } catch (e) {
-      print('GetNextLead error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString())),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: _loading ? SystemMouseCursors.basic : SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
-        onTap: _loading ? null : _handleTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 130),
-          height: 56,
-          decoration: BoxDecoration(
-            color: _pressed
-                ? _primaryDark
-                : _hovered
-                    ? const Color(0xFF1669D0)
-                    : _primary,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              if (!_loading)
-                BoxShadow(
-                  color: _primary.withOpacity(_hovered ? 0.35 : 0.20),
-                  blurRadius: _hovered ? 16 : 8,
-                  offset: const Offset(0, 4),
-                ),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: _loading
-              ? const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2.5,
-                  ),
-                )
-              : Text(
-                  widget.role == 'warm' ? 'Get Next Callback →' : 'Get Next Lead →',
-                  style: GoogleFonts.inter(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-        ),
-      ),
-    );
-  }
-}
-

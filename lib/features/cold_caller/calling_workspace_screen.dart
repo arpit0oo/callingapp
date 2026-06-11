@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
 import '../../services/lead_service.dart';
+import '../../services/rtdb_service.dart';
 import 'caller_shell.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,6 +95,10 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     super.initState();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _seconds++);
+    });
+    // Record call start time in RTDB.
+    RtdbService.updateCallerState(AppSession.tenantId, AppSession.userId, {
+      'callStarted': ServerValue.timestamp,
     });
     // Load form schema once; FutureBuilder below caches the result.
     if (AppSession.campaignId.isNotEmpty) {
@@ -254,13 +260,15 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
 
     setState(() => _showSuccess = true);
 
+    final phone = widget.currentLead?['phone']?.toString() ?? '';
+
     try {
       final leadId = widget.currentLead?['id']?.toString() ?? '';
       if (leadId.isNotEmpty) {
         await LeadService.submitDisposition(
           AppSession.tenantId,
           AppSession.campaignId,
-          widget.currentLead?['phone']?.toString() ?? '',
+          phone,
           {
             'dispositionLabel': _selectedDisposition,
             'notes': _notesCtrl.text.trim(),
@@ -278,18 +286,120 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       // swallow — UI already shows success; errors surfaced in next step
     }
 
+    // ── Read callStarted from RTDB to calculate duration ───────
+    int durationMinutes = 0;
+    int callStartedMs = 0;
+    try {
+      final snap = await RtdbService.getCallerState(
+          AppSession.tenantId, AppSession.userId);
+      final rtdbData = snap.value as Map<dynamic, dynamic>?;
+      callStartedMs = (rtdbData?['callStarted'] as int?) ?? 0;
+      if (callStartedMs > 0) {
+        final callStart =
+            DateTime.fromMillisecondsSinceEpoch(callStartedMs);
+        durationMinutes =
+            DateTime.now().difference(callStart).inSeconds ~/ 60;
+      }
+    } catch (_) {}
+
+    final now = DateTime.now();
+    final dateKey =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+    final activityDocId = '${AppSession.userId}_$dateKey';
+    final db = FirebaseFirestore.instance;
+    final tid = AppSession.tenantId;
+    final uid = AppSession.userId;
+
+    // ── Write call record to caller_activity ───────────────────
+    final callRecord = {
+      'phone': phone,
+      'callStart': callStartedMs > 0
+          ? Timestamp.fromMillisecondsSinceEpoch(callStartedMs)
+          : FieldValue.serverTimestamp(),
+      'durationMinutes': durationMinutes,
+      'disposition': _selectedDispositionType,
+      'campaignId': AppSession.campaignId,
+    };
+    try {
+      await db
+          .collection('caller_activity')
+          .doc(activityDocId)
+          .set({
+            'userId': uid,
+            'tenantId': tid,
+            'calls': FieldValue.arrayUnion([callRecord]),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+    } catch (_) {}
+
+    // ── Update caller_stats ────────────────────────────────────
+    try {
+      final statsUpdate = <String, dynamic>{
+        'callsMade': FieldValue.increment(1),
+      };
+      if (_selectedDispositionType == 'convert') {
+        statsUpdate['converted'] = FieldValue.increment(1);
+      } else if (_selectedDispositionType == 'callback') {
+        statsUpdate['callbacks'] = FieldValue.increment(1);
+      } else if (_selectedDispositionType == 'dnc') {
+        statsUpdate['dnc'] = FieldValue.increment(1);
+      }
+
+      // Build the recent call entry for the recentCalls array.
+      final timeStr =
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      final recentEntry = {
+        'phone': phone,
+        'disposition': _selectedDisposition ?? _selectedDispositionType,
+        'time': timeStr,
+      };
+
+      // Fetch current recentCalls, prepend, keep last 10.
+      final statsSnap = await db
+          .collection('tenants')
+          .doc(tid)
+          .collection('caller_stats')
+          .doc(uid)
+          .get();
+      final existing =
+          ((statsSnap.data()?['recentCalls']) as List<dynamic>? ?? []);
+      final updated = [recentEntry, ...existing].take(10).toList();
+      statsUpdate['recentCalls'] = updated;
+
+      await db
+          .collection('tenants')
+          .doc(tid)
+          .collection('caller_stats')
+          .doc(uid)
+          .set(statsUpdate, SetOptions(merge: true));
+    } catch (_) {}
+
+    // ── Clear callStarted, return RTDB status to in_session ────
+    try {
+      await RtdbService.updateCallerState(tid, uid, {
+        'callStarted': '',
+        'status': 'in_session',
+        'currentLeadId': '',
+        'lastSeen': ServerValue.timestamp,
+      });
+    } catch (_) {}
+
     await Future.delayed(const Duration(milliseconds: 1400));
     if (mounted) {
       setState(() => _showSuccess = false);
       _resetForm();
-      CallerShell.shellKey.currentState?.navigateTo(0);
+      // Navigate back to calling dashboard (index 1), not home.
+      CallerShell.shellKey.currentState?.navigateTo(1);
     }
   }
 
   // ── Build ──────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return WillPopScope(
+      // Disable Android back button — caller must submit before leaving.
+      onWillPop: () => Future.value(false),
+      child: Scaffold(
       backgroundColor: _bg,
       body: Stack(
         children: [
@@ -326,8 +436,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
           if (_showSuccess) _buildSuccessOverlay(),
         ],
       ),
-    );
-  }
+      ),        // end Scaffold (closes child: Scaffold(...))
+    );          // end WillPopScope
+  }             // end build
+
+
 
   // ── Top bar ───────────────────────────────────────────────────
 

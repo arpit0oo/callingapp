@@ -5,15 +5,16 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/app_session.dart';
 import '../../services/rtdb_service.dart';
 import 'home_screen.dart';
+import 'calling_dashboard_screen.dart';
 import 'calling_workspace_screen.dart';
 import 'performance_screen.dart';
 
 /// Mobile shell for Cold Caller / Warm Caller roles.
-/// [role] must be "cold" or "warm".
+/// [role] must be "cold_caller" or "warm_caller".
 /// Renders a bottom navigation bar with 2 visible tabs (Home, Performance)
-/// and an [IndexedStack] body with 3 children:
-///   index 0 = Home, index 1 = Workspace (hidden from nav), index 2 = Performance.
-/// [navigateTo](1) from the Get Next Lead button switches to the Workspace.
+/// and an [IndexedStack] body with 4 children:
+///   index 0 = Home, index 1 = Dashboard (hidden), index 2 = Workspace (hidden), index 3 = Performance.
+/// Use [navigateTo] with the appropriate index to switch tabs programmatically.
 class CallerShell extends StatefulWidget {
   const CallerShell({super.key, required this.role});
 
@@ -79,7 +80,7 @@ class CallerShellState extends State<CallerShell> {
       label: 'Performance',
       icon: Icons.bar_chart_outlined,
       activeIcon: Icons.bar_chart,
-      stackIndex: 2,
+      stackIndex: 3,
     ),
   ];
 
@@ -100,6 +101,7 @@ class CallerShellState extends State<CallerShell> {
                     index: _selectedIndex,
                     children: [
                       CallerHomeContent(role: widget.role),
+                      CallingDashboardContent(role: widget.role),
                       CallingWorkspaceContent(
                         role: widget.role,
                         currentLead: _currentLead,

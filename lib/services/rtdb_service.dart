@@ -14,30 +14,9 @@ class RtdbService {
     return _db.ref('caller_state/$tenantId').onValue;
   }
 
-  // Update queue counts
-  static Future<void> updateQueueCounts(
-      String tenantId,
-      String campaignId,
-      int rawDelta,
-      int warmDelta) async {
-    final ref = _db.ref('queue_counts/$tenantId/$campaignId');
-    await ref.runTransaction((data) {
-      if (data == null) {
-        return Transaction.success({
-          'rawPending': rawDelta,
-          'warmPending': warmDelta,
-        });
-      }
-      final map = Map<String, dynamic>.from(data as Map);
-      map['rawPending'] = (map['rawPending'] ?? 0) + rawDelta;
-      map['warmPending'] = (map['warmPending'] ?? 0) + warmDelta;
-      return Transaction.success(map);
-    });
-  }
-
-  // Watch queue counts (for dashboards)
-  static Stream<DatabaseEvent> watchQueueCounts(
-      String tenantId, String campaignId) {
-    return _db.ref('queue_counts/$tenantId/$campaignId').onValue;
+  // Read the current state snapshot for a single caller
+  static Future<DataSnapshot> getCallerState(
+      String tenantId, String userId) async {
+    return _db.ref('caller_state/$tenantId/$userId').get();
   }
 }
