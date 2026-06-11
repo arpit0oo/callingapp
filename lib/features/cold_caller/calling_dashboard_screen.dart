@@ -20,8 +20,12 @@ class CallingDashboardContent extends StatefulWidget {
     required this.role,
   });
 
-  /// "cold" = raw-lead caller, "warm" = callback caller.
+  /// "cold_caller" = raw-lead caller, "warm_caller" = callback caller.
   final String role;
+
+  /// Global key — lets CallingWorkspaceContent call [clearCurrentLead] after submit.
+  static final GlobalKey<_CallingDashboardContentState> dashboardKey =
+      GlobalKey<_CallingDashboardContentState>();
 
   @override
   State<CallingDashboardContent> createState() =>
@@ -188,7 +192,7 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
   void _handleOpenWorkspace() {
     if (_currentLead == null) return;
     CallerShell.shellKey.currentState?.setCurrentLead(_currentLead);
-    CallerShell.shellKey.currentState?.navigateTo(1);
+    CallerShell.shellKey.currentState?.navigateTo(2);
   }
 
   // ── Called by workspace when a lead is disposed ───────────────
@@ -207,6 +211,18 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
         'lastSeen': ServerValue.timestamp,
       },
     );
+  }
+
+  /// Called by CallingWorkspaceContent after a successful disposition submit.
+  /// Clears the locked lead card and resets idle tracking.
+  void clearCurrentLead() {
+    if (!mounted) return;
+    setState(() {
+      _currentLead = null;
+      _callsMadeThisSession++;
+      _lastActiveAt = DateTime.now();
+      _showIdleWarning = false;
+    });
   }
 
   // ── Stop Calling ──────────────────────────────────────────────
@@ -384,16 +400,15 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
                     foregroundColor: Colors.white,
                     side: const BorderSide(color: Colors.white70, width: 1.2),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 6),
-                    minimumSize: Size.zero,
+                        horizontal: 16, vertical: 8),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20)),
                   ),
                   child: Text(
-                    'Stop',
+                    'Stop Calling',
                     style: GoogleFonts.inter(
-                        fontSize: 12,
+                        fontSize: 13,
                         fontWeight: FontWeight.w600,
                         color: Colors.white),
                   ),
@@ -604,36 +619,30 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
     );
   }
 
-  // ── Open Workspace button ─────────────────────────────────────
+  // ── Place Call button ──────────────────────────────────────
   Widget _buildOpenWorkspaceButton() {
-    return GestureDetector(
-      onTap: _handleOpenWorkspace,
-      child: Container(
-        height: 56,
-        decoration: BoxDecoration(
-          color: _green,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: _green.withOpacity(0.25),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
+    return SizedBox(
+      height: 56,
+      child: ElevatedButton(
+        onPressed: _handleOpenWorkspace,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _green,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
+          elevation: 4,
+          shadowColor: _green.withOpacity(0.35),
         ),
-        alignment: Alignment.center,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.open_in_new_rounded,
-                size: 20, color: Colors.white),
+            const Icon(Icons.phone_in_talk_outlined, size: 20),
             const SizedBox(width: 8),
             Text(
-              'Open Workspace →',
+              'Place Call →',
               style: GoogleFonts.inter(
                 fontSize: 17,
                 fontWeight: FontWeight.w700,
-                color: Colors.white,
                 letterSpacing: 0.2,
               ),
             ),

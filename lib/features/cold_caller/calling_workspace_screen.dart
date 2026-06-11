@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/app_session.dart';
 import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
+import 'calling_dashboard_screen.dart';
 import 'caller_shell.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -388,8 +389,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     if (mounted) {
       setState(() => _showSuccess = false);
       _resetForm();
-      // Navigate back to calling dashboard (index 1), not home.
+      // Navigate back to calling dashboard (index 1) and clear the locked lead.
       CallerShell.shellKey.currentState?.navigateTo(1);
+      CallingDashboardContent.dashboardKey.currentState?.clearCurrentLead();
     }
   }
 

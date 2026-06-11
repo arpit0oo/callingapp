@@ -82,6 +82,46 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
 
   // ── Start Calling ─────────────────────────────────────────────
   Future<void> _handleStartCalling() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          'Start Calling Session?',
+          style: GoogleFonts.inter(
+              fontWeight: FontWeight.w700,
+              fontSize: 17,
+              color: const Color(0xFF202124)),
+        ),
+        content: Text(
+          'Your session timer will start and you will be tracked. Ready to go?',
+          style: GoogleFonts.inter(
+              fontSize: 14, color: const Color(0xFF5F6368)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Not Yet',
+              style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF5F6368)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Start Calling',
+              style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF1A73E8)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
     await RtdbService.updateCallerState(
       AppSession.tenantId,
       AppSession.userId,

@@ -101,7 +101,10 @@ class CallerShellState extends State<CallerShell> {
                     index: _selectedIndex,
                     children: [
                       CallerHomeContent(role: widget.role),
-                      CallingDashboardContent(role: widget.role),
+                      CallingDashboardContent(
+                        key: CallingDashboardContent.dashboardKey,
+                        role: widget.role,
+                      ),
                       CallingWorkspaceContent(
                         role: widget.role,
                         currentLead: _currentLead,
