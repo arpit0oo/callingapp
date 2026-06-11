@@ -259,7 +259,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       if (leadId.isNotEmpty) {
         await LeadService.submitDisposition(
           AppSession.tenantId,
-          leadId,
+          AppSession.campaignId,
+          widget.currentLead?['phone']?.toString() ?? '',
           {
             'dispositionLabel': _selectedDisposition,
             'notes': _notesCtrl.text.trim(),
@@ -267,8 +268,6 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
           },
           _selectedDispositionType,
           {
-            'phone': widget.currentLead?['phone']?.toString() ?? '',
-            'campaignId': AppSession.campaignId,
             'addedBy': AppSession.userId,
             'scheduledAt': _buildScheduledAtTimestamp(),
             'retryMinutes': 30,

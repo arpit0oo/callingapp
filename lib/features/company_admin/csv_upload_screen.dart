@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
 import '../../services/campaign_service.dart';
+import '../../services/lead_service.dart';
 import '../../shared/widgets/status_badge.dart';
 
 // ── colours ──────────────────────────────────────────────────────────────────
@@ -163,33 +164,21 @@ class _State extends State<CsvUploadContent> {
     final uid = AppSession.userId;
 
     try {
-      // batch write in chunks of 500
-      final leads = _validNums;
-      for (int i = 0; i < leads.length; i += 500) {
-        final batch = db.batch();
-        final chunk = leads.sublist(i, (i + 500).clamp(0, leads.length));
-        for (final num in chunk) {
-          final ref = db.collection('tenants').doc(tid).collection('leads').doc();
-          batch.set(ref, {
-            'phone':      num,
-            'campaignId': _campaignId,
-            'tenantId':   tid,
-            'status':     'raw',
-            'source':     'csv',
-            'createdAt':  FieldValue.serverTimestamp(),
-            'uploadedBy': uid,
-          });
-        }
-        await batch.commit();
-      }
+      // Insert all valid numbers into the raw_numbers bucket via LeadService.
+      await LeadService.batchInsertLeads(tid, _campaignId!, _validNums);
 
-      // increment rawQueueCount on the campaign
+      // Update campaign stats (creates the doc if it doesn't exist yet).
       await db
           .collection('tenants')
           .doc(tid)
           .collection('campaigns')
           .doc(_campaignId)
-          .update({'rawQueueCount': FieldValue.increment(_validNums.length)});
+          .collection('stats')
+          .doc('summary')
+          .set({
+            'totalUploaded':  FieldValue.increment(_validNums.length),
+            'queueRemaining': FieldValue.increment(_validNums.length),
+          }, SetOptions(merge: true));
 
       // activity log
       final src = _mode == 0 ? _fileName : 'paste';
