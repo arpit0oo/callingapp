@@ -17,11 +17,18 @@ class PerformanceContent extends StatefulWidget {
   /// "cold" = raw-lead caller, "warm" = callback caller.
   final String role;
 
+  static final GlobalKey<_PerformanceContentState> performanceKey =
+      GlobalKey<_PerformanceContentState>();
+
   @override
   State<PerformanceContent> createState() => _PerformanceContentState();
 }
 
 class _PerformanceContentState extends State<PerformanceContent> {
+  void refreshStats() {
+    _loadStats();
+  }
+
   // ── Colors ────────────────────────────────────────────────────
   static const _primary    = Color(0xFF1A73E8);
   static const _primaryDark = Color(0xFF1557B0);
@@ -50,11 +57,23 @@ class _PerformanceContentState extends State<PerformanceContent> {
   String _shiftDuration = '';
   String _shiftStartLabel = '';
 
-  String _formatDuration(Duration d) {
+  String _formatShiftDuration(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60);
     if (h > 0) return '${h}h ${m}m';
     return '${m}m';
+  }
+
+  /// Formats a raw second count into 'Xm Ys' or '1h 23m' if >= 3600 s.
+  String _formatDuration(int totalSeconds) {
+    if (totalSeconds >= 3600) {
+      final h = totalSeconds ~/ 3600;
+      final m = (totalSeconds % 3600) ~/ 60;
+      return '${h}h ${m}m';
+    }
+    final m = totalSeconds ~/ 60;
+    final s = totalSeconds % 60;
+    return '${m}m ${s}s';
   }
 
   Future<void> _initShiftTimer() async {
@@ -73,13 +92,13 @@ class _PerformanceContentState extends State<PerformanceContent> {
         final displayHour = hour % 12 == 0 ? 12 : hour % 12;
         setState(() {
           _shiftStartLabel = 'Started at $displayHour:$minute $period';
-          _shiftDuration = _formatDuration(DateTime.now().difference(started));
+          _shiftDuration = _formatShiftDuration(DateTime.now().difference(started));
         });
         _shiftTimer = Timer.periodic(const Duration(seconds: 60), (_) {
           if (mounted) {
             setState(() {
               _shiftDuration =
-                  _formatDuration(DateTime.now().difference(started));
+                  _formatShiftDuration(DateTime.now().difference(started));
             });
           }
         });
@@ -173,20 +192,27 @@ class _PerformanceContentState extends State<PerformanceContent> {
 
   Color _dispoColor(String label) {
     final dl = label.toLowerCase();
-    if (dl == 'interested') return const Color(0xFF34A853);
-    if (dl == 'wtl' || dl == 'cbl') return const Color(0xFF1A73E8);
+    if (dl == 'converted') return const Color(0xFF34A853);
+    if (dl == 'callback') return const Color(0xFF1A73E8);
+    if (dl == 'retry') return const Color(0xFFFBBC04);
     if (dl == 'dnc') return const Color(0xFFD93025);
+    if (dl == 'closed') return const Color(0xFF9334E6);
+    if (dl == 'info only') return const Color(0xFF9AA0A6);
     return const Color(0xFF9AA0A6);
   }
 
   (Color, Color) _chipColors(String label) {
     final dl = label.toLowerCase();
-    if (dl == 'interested') {
+    if (dl == 'converted') {
       return (const Color(0xFFE6F4EA), const Color(0xFF137333));
-    } else if (dl == 'wtl' || dl == 'cbl') {
+    } else if (dl == 'callback') {
       return (const Color(0xFFE8F0FE), const Color(0xFF1A73E8));
+    } else if (dl == 'retry') {
+      return (const Color(0xFFFFF8E1), const Color(0xFFF9A825));
     } else if (dl == 'dnc') {
       return (const Color(0xFFFCE8E6), const Color(0xFFD93025));
+    } else if (dl == 'closed') {
+      return (const Color(0xFFF3E8FD), const Color(0xFF9334E6));
     } else {
       return (const Color(0xFFF1F3F4), const Color(0xFF5F6368));
     }
@@ -198,62 +224,112 @@ class _PerformanceContentState extends State<PerformanceContent> {
     try {
       final (from, to) = _getPeriodRange();
 
-      // Query disposed leads for this user within the period
-      final snapshot = await FirebaseFirestore.instance
-          .collection('tenants')
-          .doc(AppSession.tenantId)
-          .collection('leads')
-          .where('assignedTo', isEqualTo: AppSession.userId)
-          .where('status', isEqualTo: 'disposed')
-          .where('updatedAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
-          .where('updatedAt', isLessThanOrEqualTo: Timestamp.fromDate(to))
-          .orderBy('updatedAt', descending: true)
-          .get();
-
-      final docs = snapshot.docs;
-
-      // ── Compute stats ────────────────────────────────────────
-      final callsMade = docs.length;
-      int leadsGenerated = 0;
-      int callbacks = 0;
-      final Map<String, int> dispoBreakdown = {};
-
-      for (final doc in docs) {
-        final data = doc.data();
-        final label = (data['dispositionLabel'] as String? ?? '').trim();
-        if (label.isEmpty) continue;
-
-        // Count by disposition
-        dispoBreakdown[label] = (dispoBreakdown[label] ?? 0) + 1;
-
-        final dl = label.toLowerCase();
-        if (dl == 'interested') leadsGenerated++;
-        if (dl == 'wtl' || dl == 'cbl') callbacks++;
+      // ── Generate list of yyyyMMdd date strings for the range ─────────
+      final List<String> dateStrings = [];
+      DateTime cursor = DateTime(from.year, from.month, from.day);
+      final toDay = DateTime(to.year, to.month, to.day);
+      while (!cursor.isAfter(toDay)) {
+        dateStrings.add(
+          '${cursor.year}'
+          '${cursor.month.toString().padLeft(2, '0')}'
+          '${cursor.day.toString().padLeft(2, '0')}',
+        );
+        cursor = cursor.add(const Duration(days: 1));
       }
 
-      // ── Build KPI list ───────────────────────────────────────
+      // ── Fetch each day's caller_activity doc in parallel ─────────────
+      final fs = FirebaseFirestore.instance;
+      final activityFutures = dateStrings.map((dateStr) {
+        final docId = '${AppSession.userId}_$dateStr';
+        return fs
+            .collection('tenants')
+            .doc(AppSession.tenantId)
+            .collection('caller_activity')
+            .doc(docId)
+            .get();
+      });
+      final activityDocs = await Future.wait(activityFutures);
+
+      // ── Collect all call entries from every doc that exists ───────────
+      final List<Map<String, dynamic>> allCalls = [];
+      for (final snap in activityDocs) {
+        if (!snap.exists) continue;
+        final data = snap.data();
+        final calls = (data?['calls'] as List<dynamic>?) ?? [];
+        for (final entry in calls) {
+          if (entry is Map<String, dynamic>) {
+            allCalls.add(entry);
+          } else if (entry is Map) {
+            allCalls.add(Map<String, dynamic>.from(entry));
+          }
+        }
+      }
+
+      // ── Compute KPIs from combined call list ─────────────────────────
+      final int callsMade = allCalls.length;
+      int leadsGenerated = 0;
+      int callbacks = 0;
+      int totalDurationSeconds = 0;
+
+      for (final call in allCalls) {
+        final disposition = (call['disposition'] as String? ?? '').trim();
+        final dur = (call['durationSeconds'] as num?)?.toInt() ?? 0;
+        totalDurationSeconds += dur;
+        if (disposition == 'convert') leadsGenerated++;
+        if (disposition == 'callback') callbacks++;
+      }
+
+      final int avgHandleSeconds =
+          callsMade > 0 ? totalDurationSeconds ~/ callsMade : 0;
+      final double conversionRate =
+          callsMade > 0 ? leadsGenerated / callsMade * 100 : 0.0;
+
+      final String avgHandleStr = _formatDuration(avgHandleSeconds);
+      final String talkTimeStr = _formatDuration(totalDurationSeconds);
+      final String conversionRateStr =
+          '${conversionRate.toStringAsFixed(1)}%';
+
+      // ── Build KPI list ───────────────────────────────────────────────
       final List<_KpiData> kpis;
       if (widget.role == 'warm') {
         kpis = [
           _KpiData(label: 'Callbacks Made',  value: callsMade.toString(),       icon: Icons.call_outlined,         iconColor: const Color(0xFF7B61FF)),
           _KpiData(label: 'Converted',       value: leadsGenerated.toString(),  icon: Icons.person_add_outlined,   iconColor: const Color(0xFF34A853)),
           _KpiData(label: 'Rescheduled',     value: callbacks.toString(),       icon: Icons.event_outlined,        iconColor: const Color(0xFF1A73E8)),
-          _KpiData(label: 'Avg Handle Time', value: '—',                        icon: Icons.timer_outlined,        iconColor: const Color(0xFF9334E6)),
-          _KpiData(label: 'Talk Time',       value: '—',                        icon: Icons.headset_mic_outlined,  iconColor: const Color(0xFF7B61FF)),
-          _KpiData(label: 'Conversion Rate', value: '—',                        icon: Icons.trending_up_outlined,  iconColor: const Color(0xFF34A853)),
+          _KpiData(label: 'Avg Handle Time', value: avgHandleStr,               icon: Icons.timer_outlined,        iconColor: const Color(0xFF9334E6)),
+          _KpiData(label: 'Talk Time',       value: talkTimeStr,                icon: Icons.headset_mic_outlined,  iconColor: const Color(0xFF7B61FF)),
+          _KpiData(label: 'Conversion Rate', value: conversionRateStr,          icon: Icons.trending_up_outlined,  iconColor: const Color(0xFF34A853)),
         ];
       } else {
         kpis = [
           _KpiData(label: 'Calls Made',      value: callsMade.toString(),       icon: Icons.call_outlined,         iconColor: const Color(0xFF1A73E8)),
           _KpiData(label: 'Leads Generated', value: leadsGenerated.toString(),  icon: Icons.person_add_outlined,   iconColor: const Color(0xFF34A853)),
           _KpiData(label: 'Callbacks',       value: callbacks.toString(),       icon: Icons.event_outlined,        iconColor: const Color(0xFFFBBC04)),
-          _KpiData(label: 'Avg Handle Time', value: '—',                        icon: Icons.timer_outlined,        iconColor: const Color(0xFF9334E6)),
-          _KpiData(label: 'Talk Time',       value: '—',                        icon: Icons.headset_mic_outlined,  iconColor: const Color(0xFF1A73E8)),
-          _KpiData(label: 'Conversion Rate', value: '—',                        icon: Icons.trending_up_outlined,  iconColor: const Color(0xFF34A853)),
+          _KpiData(label: 'Avg Handle Time', value: avgHandleStr,               icon: Icons.timer_outlined,        iconColor: const Color(0xFF9334E6)),
+          _KpiData(label: 'Talk Time',       value: talkTimeStr,                icon: Icons.headset_mic_outlined,  iconColor: const Color(0xFF1A73E8)),
+          _KpiData(label: 'Conversion Rate', value: conversionRateStr,          icon: Icons.trending_up_outlined,  iconColor: const Color(0xFF34A853)),
         ];
       }
 
-      // ── Build disposition breakdown ──────────────────────────
+      // ── Build disposition breakdown ──────────────────────────────────
+      const _dispoLabelMap = {
+        'convert':  'Converted',
+        'callback': 'Callback',
+        'retry':    'Retry',
+        'dnc':      'DNC',
+        'close':    'Closed',
+        'info':     'Info Only',
+      };
+
+      final Map<String, int> dispoBreakdown = {};
+      for (final call in allCalls) {
+        final type = (call['disposition'] as String? ?? '').trim();
+        final friendlyLabel = _dispoLabelMap[type];
+        if (friendlyLabel == null) continue; // defensive: skip unknown types
+        dispoBreakdown[friendlyLabel] =
+            (dispoBreakdown[friendlyLabel] ?? 0) + 1;
+      }
+
       final dispos = dispoBreakdown.entries
           .map((e) => _DispoData(
                 label: e.key,
@@ -263,30 +339,25 @@ class _PerformanceContentState extends State<PerformanceContent> {
           .toList()
         ..sort((a, b) => b.count.compareTo(a.count));
 
-      // ── Build recent calls (top 5 already ordered by updatedAt desc) ─
-      final recentDocs = docs.take(5);
-      final recentCalls = recentDocs.map((doc) {
-        final data = doc.data();
-        final phone = data['phone']?.toString() ?? '—';
-        final disposition = (data['dispositionLabel']?.toString() ?? '—').trim();
+      // ── Recent calls from caller_stats/{userId} ──────────────────────
+      final statsSnap = await fs
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('caller_stats')
+          .doc(AppSession.userId)
+          .get();
 
-        String time = '';
-        final updatedAt = data['updatedAt'];
-        if (updatedAt != null) {
-          DateTime? dt;
-          if (updatedAt is Timestamp) {
-            dt = updatedAt.toDate();
-          } else if (updatedAt is int) {
-            dt = DateTime.fromMillisecondsSinceEpoch(updatedAt);
-          }
-          if (dt != null) {
-            time =
-                '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-          }
-        }
+      final List<dynamic> rawRecent =
+          (statsSnap.data()?['recentCalls'] as List<dynamic>?) ?? [];
 
+      final recentCalls = rawRecent.take(5).map((entry) {
+        final m = entry is Map<String, dynamic>
+            ? entry
+            : Map<String, dynamic>.from(entry as Map);
+        final phone = m['phone']?.toString() ?? '—';
+        final disposition = m['disposition']?.toString() ?? '—';
+        final time = m['time']?.toString() ?? '';
         final (chipBg, chipFg) = _chipColors(disposition);
-
         return CallData(
           time: time,
           number: phone,

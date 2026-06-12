@@ -1,0 +1,15 @@
+[33m357a069[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m feat: shift/session/call duration tracking, shifts array, durationSeconds consistent, clock drift fixes
+[33mebae49e[m fix: caller_activity calls array write, sessions arrayUnion, remove invalid serverTimestamp in array
+[33m7b7688f[m fix: queue decrement on lead pop, numbers.last for consistent ordering
+[33m4770bbe[m fix: shift timer clock drift, session timer no longer resets on workspace return, caller_activity correct Firestore path
+[33m6f4b139[m feat: fix session timer reset, stop calling RTDB update, shift timer seconds
+[33m039834e[m feat: implement cold calling dashboard and workspace UI with form management and disposition handling
+[33m1d9adcd[m fix: hide bottom nav bar on calling dashboard and workspace screens
+[33m58a7fa0[m feat: add calling dashboard, session timer, idle detection, lead locking flow
+[33m1fffffa[m feat: add lead management screens for CSV/pasted number uploads and calling workspace session handling
+[33m9cb28f7[m feat: add lead_service for managing lead data operations
+[33m6c70c3d[m feat: add cold caller home, campaign settings, calling workspace, and backend services for Firestore and Lead management
+[33m876f381[m feat: implement caller home screen with shift timer and KPI metrics
+[33m7325021[m feat: performance screen wired + shift timer live + recent calls shared widget
+[33mf560967[m feat: formData saves with label keys + requiresNote/requiresCallback wired to workspace
+[33m43b92c2[m feat: campaign settings dynamic title + disposition save button

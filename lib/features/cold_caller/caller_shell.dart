@@ -74,6 +74,9 @@ class CallerShellState extends State<CallerShell> {
     if (fromHome) {
       CallingDashboardContent.dashboardKey.currentState?.restartSession();
     }
+    if (index == 3) {
+      PerformanceContent.performanceKey.currentState?.refreshStats();
+    }
   }
 
   // ── Nav-bar items (visible tabs only — Workspace is hidden) ──
@@ -118,7 +121,10 @@ class CallerShellState extends State<CallerShell> {
                         role: widget.role,
                         currentLead: _currentLead,
                       ),
-                      PerformanceContent(role: widget.role),
+                      PerformanceContent(
+                        key: PerformanceContent.performanceKey,
+                        role: widget.role,
+                      ),
                     ],
                   ),
                 ),
