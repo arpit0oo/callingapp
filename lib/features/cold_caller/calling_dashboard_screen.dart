@@ -115,13 +115,24 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
       final elapsed = DateTime.now().difference(_sessionStart);
       final m = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
       final s = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
-      final idle = DateTime.now().difference(_lastActiveAt);
+      final isDashboardVisible =
+          CallerShell.shellKey.currentState?.currentIndex == 1;
 
       setState(() {
+        // Always update the session elapsed-time label.
         _sessionLabel = elapsed.inHours > 0
             ? '${elapsed.inHours}:$m:$s'
             : '$m:$s';
 
+        if (!isDashboardVisible) {
+          // Caller is on another tab — reset the idle anchor so that time
+          // spent away from the Dashboard doesn't count as idle time.
+          _lastActiveAt = DateTime.now();
+          _showIdleWarning = false;
+          return; // skip idle evaluation entirely
+        }
+
+        final idle = DateTime.now().difference(_lastActiveAt);
         if (_currentLead == null) {
           _showIdleWarning = idle >= _warnAfter;
           if (idle >= _stopAfter) {
@@ -211,6 +222,7 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
     });
     CallerShell.shellKey.currentState?.setCurrentLead(_currentLead);
     CallingWorkspaceContent.workspaceKey.currentState?.resetTimer();
+    CallingWorkspaceContent.workspaceKey.currentState?.refreshSchema();
     CallerShell.shellKey.currentState?.navigateTo(2);
   }
 

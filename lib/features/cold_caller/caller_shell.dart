@@ -32,6 +32,10 @@ class CallerShell extends StatefulWidget {
 class CallerShellState extends State<CallerShell> {
   int _selectedIndex = 0;
 
+  /// Exposes the active [IndexedStack] index so child widgets (e.g. Dashboard)
+  /// can check whether they are currently visible without a separate observer.
+  int get currentIndex => _selectedIndex;
+
   /// Current lead being worked on by the caller.
   Map<String, dynamic>? _currentLead;
 

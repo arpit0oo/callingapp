@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/app_session.dart';
 import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
+import '../../shared/widgets/recent_call_row.dart';
 import 'calling_dashboard_screen.dart';
 import 'caller_shell.dart';
 
@@ -84,15 +85,9 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   final _callbackDates = ['Today', 'Tomorrow', 'In 2 days', 'In 3 days'];
   final _callbackTimes = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM', '06:00 PM'];
 
-  /// Parses a hex color string (e.g. "#1A73E8" or "1A73E8") into a [Color].
-  /// Returns [_primary] if the string is absent or malformed.
-  static Color _hexColor(String? hex) {
-    if (hex == null || hex.isEmpty) return const Color(0xFF1A73E8);
-    final clean = hex.startsWith('#') ? hex.substring(1) : hex;
-    final padded = clean.length == 6 ? 'FF$clean' : clean;
-    final value = int.tryParse(padded, radix: 16);
-    return value != null ? Color(value) : const Color(0xFF1A73E8);
-  }
+  /// Parses any Firestore color value (int, decimal string, or hex string)
+  /// into a [Color]. Delegates to the shared [hexOrIntColor] utility.
+  static Color _hexColor(dynamic hex) => hexOrIntColor(hex);
 
   @override
   void initState() {
@@ -127,6 +122,28 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   void resetTimer() {
     setState(() {
       _seconds = 0;
+    });
+  }
+
+  /// Re-fetches the campaign's form_schema and disposition_config from
+  /// Firestore. Call this whenever a new lead is opened so the FutureBuilders
+  /// always reflect the latest campaign configuration.
+  void refreshSchema() {
+    if (AppSession.campaignId.isEmpty) return;
+    final campaignRef = FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(AppSession.tenantId)
+        .collection('campaigns')
+        .doc(AppSession.campaignId);
+    setState(() {
+      _schemaFuture = campaignRef
+          .collection('form_schema')
+          .orderBy('order')
+          .get();
+      _dispositionFuture = campaignRef
+          .collection('disposition_config')
+          .orderBy('order')
+          .get();
     });
   }
 
