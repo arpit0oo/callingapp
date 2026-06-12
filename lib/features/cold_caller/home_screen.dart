@@ -38,6 +38,10 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   /// caused by server/device time skew cancels out completely.
   DateTime? _shiftLocalAnchor;
 
+  /// Colors loaded from Firestore disposition_config, keyed by lowercase label.
+  /// Populated once in initState(); empty map = graceful fallback to default gray.
+  Map<String, Color> _dispositionColors = {};
+
   Future<void> _loadShiftStarted() async {
     try {
       final snap = await FirebaseDatabase.instance
@@ -58,10 +62,39 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     }
   }
 
+  /// Fetches disposition_config for the current campaign and builds
+  /// [_dispositionColors] keyed by lowercase label → foreground Color.
+  Future<void> _loadDispositionColors() async {
+    if (AppSession.campaignId.isEmpty) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('campaigns')
+          .doc(AppSession.campaignId)
+          .collection('disposition_config')
+          .orderBy('order')
+          .get();
+      if (!mounted) return;
+      final map = <String, Color>{};
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final label = data['label']?.toString();
+        if (label != null && label.isNotEmpty) {
+          map[label.toLowerCase()] = hexOrIntColor(data['color']);
+        }
+      }
+      setState(() => _dispositionColors = map);
+    } catch (e) {
+      debugPrint('DispositionColors load error: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _loadShiftStarted();
+    _loadDispositionColors(); // fire-and-forget; never blocks the UI
   }
 
   // ── Start Calling ─────────────────────────────────────────────
@@ -457,28 +490,12 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
                   final disposition = entry['disposition']?.toString() ?? '—';
                   final time        = entry['time']?.toString() ?? '';
 
-                  final dl = disposition.toLowerCase();
-                  final Color chipBg;
-                  final Color chipFg;
-                  if (dl == 'interested') {
-                    chipBg = const Color(0xFFE6F4EA);
-                    chipFg = const Color(0xFF137333);
-                  } else if (dl == 'wtl' || dl == 'cbl') {
-                    chipBg = const Color(0xFFE8F0FE);
-                    chipFg = const Color(0xFF1A73E8);
-                  } else if (dl == 'dnc') {
-                    chipBg = const Color(0xFFFCE8E6);
-                    chipFg = const Color(0xFFD93025);
-                  } else if (dl == 'no answer' ||
-                      dl == 'busy' ||
-                      dl == 'switched off' ||
-                      dl == 'invalid no.') {
-                    chipBg = const Color(0xFFF1F3F4);
-                    chipFg = const Color(0xFF5F6368);
-                  } else {
-                    chipBg = const Color(0xFFFEF3E2);
-                    chipFg = const Color(0xFFE37400);
-                  }
+                  // Dynamic lookup — falls back to default gray when
+                  // _dispositionColors is still empty or label not found.
+                  const _defaultFg = Color(0xFF5F6368);
+                  final chipFg = _dispositionColors[disposition.toLowerCase()] ??
+                      _defaultFg;
+                  final chipBg = chipFg.withOpacity(0.12);
 
                   return RecentCallRow(
                     call: CallData(
