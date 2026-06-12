@@ -288,7 +288,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     }
 
     // ── Read callStarted from RTDB to calculate duration ───────
-    int durationMinutes = 0;
+    int durationSeconds = 0;
     int callStartedMs = 0;
     try {
       final snap = await RtdbService.getCallerState(
@@ -298,8 +298,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       if (callStartedMs > 0) {
         final callStart =
             DateTime.fromMillisecondsSinceEpoch(callStartedMs);
-        durationMinutes =
-            DateTime.now().difference(callStart).inSeconds ~/ 60;
+        durationSeconds =
+            DateTime.now().difference(callStart).inSeconds;
       }
     } catch (_) {}
 
@@ -317,7 +317,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       'callStart': callStartedMs > 0
           ? Timestamp.fromMillisecondsSinceEpoch(callStartedMs)
           : Timestamp.fromDate(DateTime.now()),
-      'durationMinutes': durationMinutes,
+      'durationSeconds': durationSeconds,
       'disposition': _selectedDispositionType,
       'campaignId': AppSession.campaignId,
     };

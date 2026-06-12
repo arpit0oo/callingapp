@@ -33,6 +33,10 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
 
   // ── Shift start time (fetched once from RTDB) ─────────────────
   DateTime? _shiftStarted;
+  /// Local-clock anchor captured the moment shiftStarted arrives from RTDB.
+  /// Both this and the logout DateTime.now() use the device clock, so drift
+  /// caused by server/device time skew cancels out completely.
+  DateTime? _shiftLocalAnchor;
 
   Future<void> _loadShiftStarted() async {
     try {
@@ -43,8 +47,10 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
       final data = snap.value as Map<dynamic, dynamic>?;
       final startedMs = data?['shiftStarted'] as int?;
       if (startedMs != null) {
+        final localAnchor = DateTime.now(); // capture local clock immediately
         setState(() {
           _shiftStarted = DateTime.fromMillisecondsSinceEpoch(startedMs);
+          _shiftLocalAnchor = localAnchor;
         });
       }
     } catch (e) {
@@ -152,6 +158,46 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
       AppSession.userId,
       {'status': 'offline', 'lastSeen': ServerValue.timestamp},
     );
+
+    // ── Read shiftStarted from RTDB ───────────────────────────
+    int shiftStartedMs = 0;
+    try {
+      final snap = await RtdbService.getCallerState(
+          AppSession.tenantId, AppSession.userId);
+      final rtdbData = snap.value as Map<dynamic, dynamic>?;
+      shiftStartedMs = (rtdbData?['shiftStarted'] as int?) ?? 0;
+    } catch (_) {}
+
+    // ── Write shift summary to caller_activity ────────────────
+    try {
+      final now = DateTime.now();
+      final dateKey =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+      final shiftStartTs = shiftStartedMs > 0
+          ? Timestamp.fromMillisecondsSinceEpoch(shiftStartedMs)
+          : Timestamp.fromDate(now);
+      final durationSeconds = _shiftLocalAnchor != null
+          ? now.difference(_shiftLocalAnchor!).inSeconds
+          : shiftStartedMs > 0
+              ? now
+                  .difference(DateTime.fromMillisecondsSinceEpoch(shiftStartedMs))
+                  .inSeconds
+              : 0;
+      await FirebaseFirestore.instance
+          .collection('tenants')
+          .doc(AppSession.tenantId)
+          .collection('caller_activity')
+          .doc('${AppSession.userId}_$dateKey')
+          .set({
+        'shifts': FieldValue.arrayUnion([
+          {
+            'shiftStart': shiftStartTs,
+            'shiftEnd': Timestamp.fromDate(now),
+            'durationSeconds': durationSeconds,
+          }
+        ]),
+      }, SetOptions(merge: true));
+    } catch (_) {}
 
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(

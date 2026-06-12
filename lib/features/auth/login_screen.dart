@@ -163,6 +163,22 @@ class _LoginScreenState extends State<LoginScreen> {
             'status': 'on_shift',
             'lastSeen': ServerValue.timestamp,
           });
+          {
+            final now = DateTime.now();
+            final dateKey =
+                '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+            await FirebaseFirestore.instance
+                .collection('tenants')
+                .doc(tenantId)
+                .collection('caller_activity')
+                .doc('${user.uid}_$dateKey')
+                .set({
+              'shiftStart': Timestamp.fromDate(now),
+              'date': dateKey,
+              'userId': user.uid,
+              'tenantId': tenantId,
+            }, SetOptions(merge: true));
+          }
           if (!mounted) return;
           _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold_caller'));
           break;
@@ -172,6 +188,22 @@ class _LoginScreenState extends State<LoginScreen> {
             'status': 'on_shift',
             'lastSeen': ServerValue.timestamp,
           });
+          {
+            final now = DateTime.now();
+            final dateKey =
+                '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+            await FirebaseFirestore.instance
+                .collection('tenants')
+                .doc(tenantId)
+                .collection('caller_activity')
+                .doc('${user.uid}_$dateKey')
+                .set({
+              'shiftStart': Timestamp.fromDate(now),
+              'date': dateKey,
+              'userId': user.uid,
+              'tenantId': tenantId,
+            }, SetOptions(merge: true));
+          }
           if (!mounted) return;
           _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm_caller'));
           break;
@@ -323,9 +355,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     if (_authError != null) _buildAuthError(_authError!),
                     const SizedBox(height: 24),
 
-                    // ── Quick Access (Testing) ────────────────
-                    _buildQuickAccessButtons(),
-                    const SizedBox(height: 24),
 
                     // ── Divider with help text ────────────────
                     _buildHelpDivider(),
@@ -477,64 +506,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildQuickAccessButtons() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Label
-        Center(
-          child: Text(
-            'Quick Access (Testing)',
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              color: _textSecondary,
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        // Company Admin
-        _RoleButton(
-          label: 'Company Admin',
-          color: _primary,
-          textColor: Colors.white,
-          onTap: () => _goTo(AdminShell(key: AdminShell.shellKey)),
-        ),
-        const SizedBox(height: 8),
-        // Manager
-        _RoleButton(
-          label: 'Manager',
-          color: const Color(0xFF34A853),
-          textColor: Colors.white,
-          onTap: () => _goTo(ManagerShell(key: ManagerShell.shellKey)),
-        ),
-        const SizedBox(height: 8),
-        // Cold Caller
-        _RoleButton(
-          label: 'Cold Caller',
-          color: const Color(0xFFFBBC04),
-          textColor: const Color(0xFF202124),
-          onTap: () => _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold')),
-        ),
-        const SizedBox(height: 8),
-        // Warm Caller
-        _RoleButton(
-          label: 'Warm Caller',
-          color: const Color(0xFF7B61FF),
-          textColor: Colors.white,
-          onTap: () => _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm')),
-        ),
-        const SizedBox(height: 8),
-        // Super Admin
-        _RoleButton(
-          label: 'Super Admin',
-          color: const Color(0xFF5F6368),
-          textColor: Colors.white,
-          onTap: () => _goTo(SuperAdminShell(key: SuperAdminShell.shellKey)),
-        ),
-      ],
-    );
-  }
 
   Widget _buildHelpDivider() {
     return Row(
