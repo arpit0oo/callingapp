@@ -9,6 +9,7 @@ import '../../services/app_session.dart';
 import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
 import 'caller_shell.dart';
+import 'calling_workspace_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Calling Session Dashboard
@@ -205,7 +206,11 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
   // ── Open Workspace with current lead ─────────────────────────
   void _handleOpenWorkspace() {
     if (_currentLead == null) return;
+    RtdbService.updateCallerState(AppSession.tenantId, AppSession.userId, {
+      'callStarted': DateTime.now().millisecondsSinceEpoch,
+    });
     CallerShell.shellKey.currentState?.setCurrentLead(_currentLead);
+    CallingWorkspaceContent.workspaceKey.currentState?.resetTimer();
     CallerShell.shellKey.currentState?.navigateTo(2);
   }
 

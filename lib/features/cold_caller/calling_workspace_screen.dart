@@ -29,6 +29,9 @@ class CallingWorkspaceContent extends StatefulWidget {
   /// as an empty state when null.
   final Map<String, dynamic>? currentLead;
 
+  static final GlobalKey<_CallingWorkspaceContentState> workspaceKey =
+      GlobalKey<_CallingWorkspaceContentState>();
+
   @override
   State<CallingWorkspaceContent> createState() =>
       _CallingWorkspaceContentState();
@@ -99,7 +102,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     });
     // Record call start time in RTDB.
     RtdbService.updateCallerState(AppSession.tenantId, AppSession.userId, {
-      'callStarted': ServerValue.timestamp,
+      'callStarted': DateTime.now().millisecondsSinceEpoch,
     });
     // Load form schema once; FutureBuilder below caches the result.
     if (AppSession.campaignId.isNotEmpty) {
@@ -119,6 +122,12 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
           .orderBy('order')
           .get();
     }
+  }
+
+  void resetTimer() {
+    setState(() {
+      _seconds = 0;
+    });
   }
 
   @override
@@ -452,13 +461,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     return Container(
       height: 56,
       color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back, size: 22, color: Color(0xFF202124)),
-            onPressed: () => CallerShell.shellKey.currentState?.navigateTo(0),
-          ),
+          // No back button — caller must submit before leaving.
+          const SizedBox(width: 40),
           Expanded(
             child: Text(
               'Current Lead',

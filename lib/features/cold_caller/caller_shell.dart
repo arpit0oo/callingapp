@@ -118,6 +118,7 @@ class CallerShellState extends State<CallerShell> {
                         role: widget.role,
                       ),
                       CallingWorkspaceContent(
+                        key: CallingWorkspaceContent.workspaceKey,
                         role: widget.role,
                         currentLead: _currentLead,
                       ),
