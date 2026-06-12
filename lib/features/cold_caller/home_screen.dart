@@ -1,3 +1,4 @@
+
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -30,18 +31,10 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   static const _textPrimary  = Color(0xFF202124);
   static const _textHint     = Color(0xFF9AA0A6);
 
-  // ── Shift timer ───────────────────────────────────────────────
-  Timer? _shiftTimer;
-  String _shiftDuration = '';
+  // ── Shift start time (fetched once from RTDB) ─────────────────
+  DateTime? _shiftStarted;
 
-  String _formatDuration(Duration d) {
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '${h}h ${m}m ${s}s';
-  }
-
-  Future<void> _initShiftTimer() async {
+  Future<void> _loadShiftStarted() async {
     try {
       final snap = await FirebaseDatabase.instance
           .ref('caller_state/${AppSession.tenantId}/${AppSession.userId}')
@@ -50,17 +43,8 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
       final data = snap.value as Map<dynamic, dynamic>?;
       final startedMs = data?['shiftStarted'] as int?;
       if (startedMs != null) {
-        final started = DateTime.fromMillisecondsSinceEpoch(startedMs);
         setState(() {
-          _shiftDuration = _formatDuration(DateTime.now().difference(started));
-        });
-        _shiftTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-          if (mounted) {
-            setState(() {
-              _shiftDuration =
-                  _formatDuration(DateTime.now().difference(started));
-            });
-          }
+          _shiftStarted = DateTime.fromMillisecondsSinceEpoch(startedMs);
         });
       }
     } catch (e) {
@@ -71,13 +55,7 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   @override
   void initState() {
     super.initState();
-    _initShiftTimer();
-  }
-
-  @override
-  void dispose() {
-    _shiftTimer?.cancel();
-    super.dispose();
+    _loadShiftStarted();
   }
 
   // ── Start Calling ─────────────────────────────────────────────
@@ -246,13 +224,15 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: Text(
-                  'Shift Active${_shiftDuration.isNotEmpty ? ' — $_shiftDuration' : ''}',
-                  style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white),
-                ),
+                child: _shiftStarted != null
+                    ? _ShiftTimerText(shiftStarted: _shiftStarted!)
+                    : Text(
+                        'Shift Active',
+                        style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white),
+                      ),
               ),
               OutlinedButton(
                 onPressed: _handleEndShift,
@@ -470,6 +450,70 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shift timer text — isolated StatefulWidget to avoid rebuilding parent tree
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ShiftTimerText extends StatefulWidget {
+  const _ShiftTimerText({required this.shiftStarted});
+  final DateTime shiftStarted;
+
+  @override
+  State<_ShiftTimerText> createState() => _ShiftTimerTextState();
+}
+
+class _ShiftTimerTextState extends State<_ShiftTimerText> {
+  late Timer _timer;
+  late Duration _elapsed;
+
+  /// The server-side shift start timestamp (kept for reference only).
+  late DateTime _serverStart;
+
+  /// Local clock reading captured at the moment initState runs.
+  /// All elapsed calculations use this anchor to avoid device/server clock drift.
+  late DateTime _localAnchor;
+
+  String _fmt(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '${h}h ${m}m ${s}s';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _serverStart  = widget.shiftStarted; // server timestamp — not used for elapsed
+    _localAnchor  = DateTime.now();      // local clock at widget creation
+    _elapsed      = Duration.zero;       // start from 0, not from server skew
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          // Always diff against the local anchor — immune to device/server skew.
+          _elapsed = DateTime.now().difference(_localAnchor);
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      'Shift Active — ${_fmt(_elapsed)}',
+      style: GoogleFonts.inter(
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+          color: Colors.white),
     );
   }
 }

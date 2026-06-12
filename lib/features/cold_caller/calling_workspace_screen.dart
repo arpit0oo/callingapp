@@ -323,6 +323,8 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     };
     try {
       await db
+          .collection('tenants')
+          .doc(tid)
           .collection('caller_activity')
           .doc(activityDocId)
           .set({

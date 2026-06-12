@@ -65,9 +65,13 @@ class CallerShellState extends State<CallerShell> {
   static const _unselectedColor = Color(0xFF9AA0A6);
 
   /// Programmatically switch to any tab by index.
+  /// [restartSession] is only called when navigating TO the dashboard (index 1)
+  /// FROM home (index 0). Returning from workspace (index 2) back to the
+  /// dashboard must not reset the in-progress session.
   void navigateTo(int index) {
+    final fromHome = _selectedIndex == 0 && index == 1;
     setState(() => _selectedIndex = index);
-    if (index == 1) {
+    if (fromHome) {
       CallingDashboardContent.dashboardKey.currentState?.restartSession();
     }
   }

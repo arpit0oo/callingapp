@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
+import '../../services/rtdb_service.dart';
 import '../company_admin/admin_shell.dart';
 import '../manager/manager_shell.dart';
 import '../cold_caller/caller_shell.dart';
@@ -156,9 +158,21 @@ class _LoginScreenState extends State<LoginScreen> {
           _goTo(ManagerShell(key: ManagerShell.shellKey));
           break;
         case 'cold_caller':
+          await RtdbService.updateCallerState(tenantId, user.uid, {
+            'shiftStarted': ServerValue.timestamp,
+            'status': 'on_shift',
+            'lastSeen': ServerValue.timestamp,
+          });
+          if (!mounted) return;
           _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold_caller'));
           break;
         case 'warm_caller':
+          await RtdbService.updateCallerState(tenantId, user.uid, {
+            'shiftStarted': ServerValue.timestamp,
+            'status': 'on_shift',
+            'lastSeen': ServerValue.timestamp,
+          });
+          if (!mounted) return;
           _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm_caller'));
           break;
         case AppRoles.superAdmin:

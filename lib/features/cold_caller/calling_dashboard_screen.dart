@@ -308,6 +308,8 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
     final elapsed = now.difference(_sessionStart);
 
     await FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(AppSession.tenantId)
         .collection('caller_activity')
         .doc(docId)
         .set({
