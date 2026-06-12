@@ -38,10 +38,6 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
   /// caused by server/device time skew cancels out completely.
   DateTime? _shiftLocalAnchor;
 
-  /// Colors loaded from Firestore disposition_config, keyed by lowercase label.
-  /// Populated once in initState(); empty map = graceful fallback to default gray.
-  Map<String, Color> _dispositionColors = {};
-
   Future<void> _loadShiftStarted() async {
     try {
       final snap = await FirebaseDatabase.instance
@@ -62,39 +58,10 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
     }
   }
 
-  /// Fetches disposition_config for the current campaign and builds
-  /// [_dispositionColors] keyed by lowercase label → foreground Color.
-  Future<void> _loadDispositionColors() async {
-    if (AppSession.campaignId.isEmpty) return;
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('tenants')
-          .doc(AppSession.tenantId)
-          .collection('campaigns')
-          .doc(AppSession.campaignId)
-          .collection('disposition_config')
-          .orderBy('order')
-          .get();
-      if (!mounted) return;
-      final map = <String, Color>{};
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final label = data['label']?.toString();
-        if (label != null && label.isNotEmpty) {
-          map[label.toLowerCase()] = hexOrIntColor(data['color']);
-        }
-      }
-      setState(() => _dispositionColors = map);
-    } catch (e) {
-      debugPrint('DispositionColors load error: $e');
-    }
-  }
-
   @override
   void initState() {
     super.initState();
     _loadShiftStarted();
-    _loadDispositionColors(); // fire-and-forget; never blocks the UI
   }
 
   // ── Start Calling ─────────────────────────────────────────────
@@ -490,10 +457,10 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
                   final disposition = entry['disposition']?.toString() ?? '—';
                   final time        = entry['time']?.toString() ?? '';
 
-                  // Dynamic lookup — falls back to default gray when
-                  // _dispositionColors is still empty or label not found.
+                  // Reads from the global map pre-fetched at login.
+                  // Falls back to default gray if not found.
                   const _defaultFg = Color(0xFF5F6368);
-                  final chipFg = _dispositionColors[disposition.toLowerCase()] ??
+                  final chipFg = AppSession.dispositionColors[disposition.toLowerCase()] ??
                       _defaultFg;
                   final chipBg = chipFg.withOpacity(0.12);
 

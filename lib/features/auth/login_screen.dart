@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
 import '../../services/rtdb_service.dart';
+import '../../shared/widgets/recent_call_row.dart';
 import '../company_admin/admin_shell.dart';
 import '../manager/manager_shell.dart';
 import '../cold_caller/caller_shell.dart';
@@ -144,6 +145,33 @@ class _LoginScreenState extends State<LoginScreen> {
         } catch (_) {
           // Non-fatal: fall back to the raw campaign ID.
           AppSession.campaignName = AppSession.campaignId;
+        }
+      }
+
+      // Pre-fetch disposition colors so all caller screens have them
+      // immediately without individual per-screen fetches.
+      if (AppSession.campaignId.isNotEmpty) {
+        try {
+          final dispositionSnap = await FirebaseFirestore.instance
+              .collection('tenants')
+              .doc(tenantId)
+              .collection('campaigns')
+              .doc(AppSession.campaignId)
+              .collection('disposition_config')
+              .orderBy('order')
+              .get();
+          final colorMap = <String, Color>{};
+          for (final doc in dispositionSnap.docs) {
+            final d = doc.data();
+            final label = d['label']?.toString();
+            if (label != null && label.isNotEmpty) {
+              colorMap[label.toLowerCase()] = hexOrIntColor(d['color']);
+            }
+          }
+          AppSession.dispositionColors = colorMap;
+        } catch (_) {
+          // Non-fatal: screens fall back to their default gray chips.
+          AppSession.dispositionColors = {};
         }
       }
 

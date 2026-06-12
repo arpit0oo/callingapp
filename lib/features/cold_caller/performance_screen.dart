@@ -57,6 +57,7 @@ class _PerformanceContentState extends State<PerformanceContent> {
   String _shiftDuration = '';
   String _shiftStartLabel = '';
 
+
   String _formatShiftDuration(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60);
@@ -190,6 +191,13 @@ class _PerformanceContentState extends State<PerformanceContent> {
     }
   }
 
+  // NOTE: _dispoColor operates on internal type-level friendly labels
+  // ("Converted", "Callback", "Retry", "DNC", "Closed", "Info Only") that
+  // are produced by _dispoLabelMap from raw disposition *types* ('convert',
+  // 'callback', etc.). These are entirely distinct from the admin-configured
+  // disposition *label* field in disposition_config (e.g. "WTL", "AGREE").
+  // Unifying them would require storing a per-type color in the campaign schema,
+  // which does not currently exist. Keeping hardcoded intentionally.
   Color _dispoColor(String label) {
     final dl = label.toLowerCase();
     if (dl == 'converted') return const Color(0xFF34A853);
@@ -201,21 +209,29 @@ class _PerformanceContentState extends State<PerformanceContent> {
     return const Color(0xFF9AA0A6);
   }
 
+  /// Derives chip (bg, fg) colors for the Recent Calls list.
+  /// Foreground is looked up from [_dispositionColors] (admin-configured
+  /// disposition label → Firestore color). Falls back to hardcoded type-based
+  /// colors while [_dispositionColors] is still loading or the label is absent.
   (Color, Color) _chipColors(String label) {
     final dl = label.toLowerCase();
+    // Hardcoded fallback — used before Firestore data arrives or for unknown labels.
+    final Color fallbackFg;
     if (dl == 'converted') {
-      return (const Color(0xFFE6F4EA), const Color(0xFF137333));
+      fallbackFg = const Color(0xFF137333);
     } else if (dl == 'callback') {
-      return (const Color(0xFFE8F0FE), const Color(0xFF1A73E8));
+      fallbackFg = const Color(0xFF1A73E8);
     } else if (dl == 'retry') {
-      return (const Color(0xFFFFF8E1), const Color(0xFFF9A825));
+      fallbackFg = const Color(0xFFF9A825);
     } else if (dl == 'dnc') {
-      return (const Color(0xFFFCE8E6), const Color(0xFFD93025));
+      fallbackFg = const Color(0xFFD93025);
     } else if (dl == 'closed') {
-      return (const Color(0xFFF3E8FD), const Color(0xFF9334E6));
+      fallbackFg = const Color(0xFF9334E6);
     } else {
-      return (const Color(0xFFF1F3F4), const Color(0xFF5F6368));
+      fallbackFg = const Color(0xFF5F6368);
     }
+    final chipFg = AppSession.dispositionColors[dl] ?? fallbackFg;
+    return (chipFg.withOpacity(0.12), chipFg);
   }
 
   Future<void> _loadStats() async {
