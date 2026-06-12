@@ -316,7 +316,7 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       'phone': phone,
       'callStart': callStartedMs > 0
           ? Timestamp.fromMillisecondsSinceEpoch(callStartedMs)
-          : FieldValue.serverTimestamp(),
+          : Timestamp.fromDate(DateTime.now()),
       'durationMinutes': durationMinutes,
       'disposition': _selectedDispositionType,
       'campaignId': AppSession.campaignId,

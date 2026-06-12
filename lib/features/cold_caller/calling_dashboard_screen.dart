@@ -313,15 +313,25 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
         .collection('caller_activity')
         .doc(docId)
         .set({
-      'userId': AppSession.userId,
-      'tenantId': AppSession.tenantId,
+      // ── Doc-level identifiers (stable across multiple sessions per day) ──
+      'userId':     AppSession.userId,
+      'tenantId':   AppSession.tenantId,
+      'date':       dateKey,               // 'yyyyMMdd' — for manager date filters
       'campaignId': AppSession.campaignId,
-      'sessionStart': Timestamp.fromDate(_sessionStart),
-      'sessionEnd': FieldValue.serverTimestamp(),
-      'durationSeconds': elapsed.inSeconds,
-      'callsMade': _callsMadeThisSession,
-      'stopReason': reason,
-      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedAt':  FieldValue.serverTimestamp(),
+
+      // ── Append this session as an entry in the sessions array ────────────
+      // arrayUnion ensures each stop/start cycle accumulates without
+      // overwriting previous sessions recorded on the same day.
+      'sessions': FieldValue.arrayUnion([
+        {
+          'sessionStart':    Timestamp.fromDate(_sessionStart),
+          'sessionEnd':      Timestamp.fromDate(now),   // client time; close enough
+          'durationSeconds': elapsed.inSeconds,
+          'callsMade':       _callsMadeThisSession,
+          'stopReason':      reason,
+        }
+      ]),
     }, SetOptions(merge: true));
 
     await RtdbService.updateCallerState(
