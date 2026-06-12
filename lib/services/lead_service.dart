@@ -28,7 +28,7 @@ class LeadService {
 
         if (numbers.isEmpty) continue;
 
-        final phone = numbers.first;
+        final phone = numbers.last;
 
         // Pop the number from the bucket atomically.
         await bucketRef.update({
@@ -55,6 +55,17 @@ class LeadService {
           await leadRef.set(leadData);
         }
 
+        // Decrement queue counter on the campaign stats document.
+        await FirebaseFirestore.instance
+            .collection('tenants')
+            .doc(tenantId)
+            .collection('campaigns')
+            .doc(campaignId)
+            .collection('stats')
+            .doc('summary')
+            .set({'queueRemaining': FieldValue.increment(-1)},
+                SetOptions(merge: true));
+
         return {'id': phone, ...leadData};
       }
 
@@ -72,7 +83,7 @@ class LeadService {
 
     if (numbers.isEmpty) return null;
 
-    final phone = numbers.first;
+    final phone = numbers.last;
 
     // Pop the number from the bucket atomically.
     await rawRef.update({
@@ -90,6 +101,17 @@ class LeadService {
       'lockedAt': FieldValue.serverTimestamp(),
       'attempts': FieldValue.increment(1),
     }, SetOptions(merge: true));
+
+    // Decrement queue counter on the campaign stats document.
+    await FirebaseFirestore.instance
+        .collection('tenants')
+        .doc(tenantId)
+        .collection('campaigns')
+        .doc(campaignId)
+        .collection('stats')
+        .doc('summary')
+        .set({'queueRemaining': FieldValue.increment(-1)},
+            SetOptions(merge: true));
 
     return {'id': phone, 'phone': phone};
   }
