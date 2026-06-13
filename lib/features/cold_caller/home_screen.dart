@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
+import '../../services/firestore_service.dart';
 import '../../services/rtdb_service.dart';
 import '../../shared/widgets/recent_call_row.dart';
 import '../auth/login_screen.dart';
@@ -363,38 +364,90 @@ class _CallerHomeContentState extends State<CallerHomeContent> {
           _StartCallingButton(
               role: widget.role, onTap: _handleStartCalling),
           const SizedBox(height: 8),
-          // Queue count — one-time read from campaigns/{id}/stats/summary
-          FutureBuilder<DocumentSnapshot>(
-            future: AppSession.campaignId.isEmpty
-                ? null
-                : FirebaseFirestore.instance
-                    .collection('tenants')
-                    .doc(AppSession.tenantId)
-                    .collection('campaigns')
-                    .doc(AppSession.campaignId)
-                    .collection('stats')
-                    .doc('summary')
-                    .get(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return Text('...',
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.inter(
-                        fontSize: 13, color: _textHint));
-              }
-              final data =
-                  (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
-              final q = (data['queueRemaining'] as num?)?.toInt() ?? 0;
-              return Text(
-                '$q leads remaining in queue',
-                textAlign: TextAlign.center,
-                style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: _textHint,
-                    fontWeight: FontWeight.w400),
-              );
-            },
-          ),
+          // Queue count — live stream, role-based (mirrors CallingDashboard logic)
+          if (widget.role == AppRoles.coldCaller)
+            StreamBuilder<DocumentSnapshot>(
+              stream: AppSession.campaignId.isEmpty
+                  ? null
+                  : FirestoreService.rawNumbersDoc(
+                      AppSession.tenantId,
+                      AppSession.campaignId,
+                      'unfiltered',
+                    ).snapshots(),
+              builder: (context, snap) {
+                int q = 0;
+                if (snap.hasData && snap.data!.exists) {
+                  final data =
+                      snap.data!.data() as Map<String, dynamic>? ?? {};
+                  q = (data['numbers'] as List<dynamic>?)?.length ?? 0;
+                }
+                return Text(
+                  snap.hasData ? '$q leads remaining in queue' : '...',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: _textHint,
+                      fontWeight: FontWeight.w400),
+                );
+              },
+            )
+          else if (widget.role == AppRoles.warmCaller)
+            StreamBuilder<DocumentSnapshot>(
+              stream: AppSession.campaignId.isEmpty
+                  ? null
+                  : FirestoreService.warmNumbersDoc(
+                      AppSession.tenantId,
+                      AppSession.campaignId,
+                      'callback',
+                    ).snapshots(),
+              builder: (context, callbackSnap) {
+                return StreamBuilder<DocumentSnapshot>(
+                  stream: AppSession.campaignId.isEmpty
+                      ? null
+                      : FirestoreService.warmNumbersDoc(
+                          AppSession.tenantId,
+                          AppSession.campaignId,
+                          'retry',
+                        ).snapshots(),
+                  builder: (context, retrySnap) {
+                    int q = 0;
+                    final hasBoth =
+                        callbackSnap.hasData && retrySnap.hasData;
+                    if (hasBoth) {
+                      if (callbackSnap.data!.exists) {
+                        final d = callbackSnap.data!.data()
+                                as Map<String, dynamic>? ??
+                            {};
+                        q += (d['numbers'] as List<dynamic>?)?.length ?? 0;
+                      }
+                      if (retrySnap.data!.exists) {
+                        final d = retrySnap.data!.data()
+                                as Map<String, dynamic>? ??
+                            {};
+                        q += (d['numbers'] as List<dynamic>?)?.length ?? 0;
+                      }
+                    }
+                    return Text(
+                      hasBoth ? '$q leads remaining in queue' : '...',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: _textHint,
+                          fontWeight: FontWeight.w400),
+                    );
+                  },
+                );
+              },
+            )
+          else
+            Text(
+              '— leads remaining in queue',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: _textHint,
+                  fontWeight: FontWeight.w400),
+            ),
         ],
       ),
     );
