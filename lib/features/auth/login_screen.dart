@@ -193,6 +193,7 @@ class _LoginScreenState extends State<LoginScreen> {
           _goTo(ManagerShell(key: ManagerShell.shellKey));
           break;
         case 'cold_caller':
+        case AppRoles.coldCaller:
           await RtdbService.updateCallerState(tenantId, user.uid, {
             'shiftStarted': ServerValue.timestamp,
             'status': 'on_shift',
@@ -215,9 +216,10 @@ class _LoginScreenState extends State<LoginScreen> {
             }, SetOptions(merge: true));
           }
           if (!mounted) return;
-          _goTo(CallerShell(key: CallerShell.shellKey, role: 'cold_caller'));
+          _goTo(CallerShell(key: CallerShell.shellKey, role: AppSession.role));
           break;
         case 'warm_caller':
+        case AppRoles.warmCaller:
           await RtdbService.updateCallerState(tenantId, user.uid, {
             'shiftStarted': ServerValue.timestamp,
             'status': 'on_shift',
@@ -240,7 +242,7 @@ class _LoginScreenState extends State<LoginScreen> {
             }, SetOptions(merge: true));
           }
           if (!mounted) return;
-          _goTo(CallerShell(key: CallerShell.shellKey, role: 'warm_caller'));
+          _goTo(CallerShell(key: CallerShell.shellKey, role: AppSession.role));
           break;
         case AppRoles.superAdmin:
           _goTo(SuperAdminShell(key: SuperAdminShell.shellKey));
