@@ -124,7 +124,14 @@ class _LoginScreenState extends State<LoginScreen> {
       AppSession.tenantId = tenantId;
       AppSession.userId   = user.uid;
       AppSession.name     = data['name'] ?? '';
-      AppSession.role     = (data['role'] as String? ?? '').toLowerCase();
+      final rawRole = (data['role'] as String? ?? '').toLowerCase();
+      if (rawRole == 'cold_caller') {
+        AppSession.role = AppRoles.coldCaller;
+      } else if (rawRole == 'warm_caller') {
+        AppSession.role = AppRoles.warmCaller;
+      } else {
+        AppSession.role = rawRole;
+      }
 
       final assignedCampaigns =
           (data['assignedCampaigns'] as List<dynamic>? ?? []);
