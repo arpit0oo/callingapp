@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'app_session.dart';
 import 'firestore_service.dart';
 
 class LeadService {
@@ -15,7 +16,7 @@ class LeadService {
       {String role = 'cold_caller'}) async {
 
     // ── Warm-caller path: pull from warm_numbers buckets ──────────────────
-    if (role == 'warm_caller') {
+    if (role == AppRoles.warmCaller) {
       // Try callback bucket first, fall back to retry bucket.
       for (final bucket in ['callback', 'retry']) {
         final bucketRef =
