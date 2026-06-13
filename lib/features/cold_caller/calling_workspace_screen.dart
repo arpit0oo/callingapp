@@ -442,6 +442,10 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
   // ── Build ──────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    // Extract the most recent history entry for the Previous Context card.
+    final history = widget.currentLead?['history'] as List<dynamic>? ?? [];
+    final previousContext =
+        history.isNotEmpty ? history.last as Map<String, dynamic> : null;
     return WillPopScope(
       // Disable Android back button — caller must submit before leaving.
       onWillPop: () => Future.value(false),
@@ -460,6 +464,11 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                     children: [
                       _buildLeadCard(),
                       const SizedBox(height: 12),
+                      if (AppSession.role == AppRoles.warmCaller &&
+                          previousContext != null) ...[
+                        _buildPreviousContextCard(previousContext),
+                        const SizedBox(height: 12),
+                      ],
                       _buildFormCard(),
                       const SizedBox(height: 12),
                       _buildNotesCard(),
@@ -614,6 +623,148 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
     );
   }
 
+  // ── Previous context card (warm callers only) ─────────────────
+
+  Widget _buildPreviousContextCard(Map<String, dynamic> contextData) {
+    final label = contextData['dispositionLabel']?.toString() ?? '—';
+    final notes = contextData['notes']?.toString() ?? '';
+    final by    = contextData['by']?.toString() ?? '';
+
+    // Format the Firestore Timestamp into a relative time string.
+    String timeStr = '';
+    final at = contextData['at'];
+    if (at is Timestamp) {
+      final dt   = at.toDate();
+      final diff = DateTime.now().difference(dt);
+      if (diff.inDays > 0) {
+        timeStr = '${diff.inDays}d ago';
+      } else if (diff.inHours > 0) {
+        timeStr = '${diff.inHours}h ago';
+      } else {
+        timeStr = '${diff.inMinutes}m ago';
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBE6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFE082), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+
+          // ── Header: icon + title + relative timestamp ──────────
+          Row(
+            children: [
+              const Icon(Icons.history_outlined,
+                  size: 14, color: Color(0xFFB8860B)),
+              const SizedBox(width: 6),
+              Text(
+                'Previous Call Context',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFFB8860B),
+                ),
+              ),
+              const Spacer(),
+              if (timeStr.isNotEmpty)
+                Text(
+                  timeStr,
+                  style: GoogleFonts.inter(
+                      fontSize: 11, color: const Color(0xFF9AA0A6)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // ── Disposition badge ───────────────────────────────
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFE082),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF7B5E00),
+              ),
+            ),
+          ),
+
+          // ── Notes block ───────────────────────────────────────
+          if (notes.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.65),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                notes,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: const Color(0xFF3C4043),
+                  height: 1.45,
+                ),
+              ),
+            ),
+          ],
+
+          // ── Agent attribution (resolved via Firestore) ─────────
+          if (by.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            FutureBuilder<DocumentSnapshot>(
+              future: FirebaseFirestore.instance
+                  .collection('tenants')
+                  .doc(AppSession.tenantId)
+                  .collection('users')
+                  .doc(by)
+                  .get(),
+              builder: (context, snap) {
+                final name = (snap.hasData && snap.data!.exists)
+                    ? ((snap.data!.data() as Map<String, dynamic>?)
+                            ?['name']
+                            ?.toString() ??
+                        'Unknown Agent')
+                    : 'Unknown Agent';
+                return Row(
+                  children: [
+                    const Icon(Icons.person_outline,
+                        size: 12, color: Color(0xFF9AA0A6)),
+                    const SizedBox(width: 4),
+                    Text(
+                      name,
+                      style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: const Color(0xFF9AA0A6)),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   // ── Dynamic form card (Firestore-driven) ─────────────────────
 
   Widget _buildFormCard() {
@@ -677,6 +828,44 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
               ],
             ),
           );
+        }
+
+        // Build a label→docId reverse map so the prefill block can resolve
+        // _formControllers entries (keyed by doc ID) from formData keys (keyed by label).
+        final Map<String, String> labelToFieldId = {};
+        for (final doc in docs) {
+          final d = doc.data() as Map<String, dynamic>;
+          final lbl = d['label']?.toString() ?? doc.id;
+          labelToFieldId[lbl] = doc.id;
+        }
+
+        // ── Auto-fill from previous context (warm callers only) ───
+        // Runs after the first frame so all _formControllers from
+        // putIfAbsent calls below are guaranteed to exist.
+        if (AppSession.role == AppRoles.warmCaller) {
+          final h = widget.currentLead?['history'] as List<dynamic>? ?? [];
+          if (h.isNotEmpty) {
+            final prevFormData =
+                (h.last as Map<String, dynamic>)['formData']
+                    as Map<String, dynamic>?;
+            if (prevFormData != null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                bool changed = false;
+                prevFormData.forEach((key, value) {
+                  final val = value?.toString() ?? '';
+                  final fieldId = labelToFieldId[key];
+                  final ctrl = fieldId != null ? _formControllers[fieldId] : null;
+                  if (ctrl != null && ctrl.text.isEmpty && val.isNotEmpty) {
+                    ctrl.text = val;
+                    _formData[key] = val;
+                    changed = true;
+                  }
+                });
+                if (changed && mounted) setState(() {});
+              });
+            }
+          }
         }
 
         return _Card(
