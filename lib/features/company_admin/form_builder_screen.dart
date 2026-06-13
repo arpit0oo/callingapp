@@ -50,14 +50,17 @@ class _CanvasField {
     required this.label,
     this.required = false,
     List<String>? options,
+    List<String>? allowedRoles,
   }) : id = UniqueKey(),
-       options = options ?? [];
+       options = options ?? [],
+       allowedRoles = allowedRoles ?? ['cold', 'warm'];
 
   final Key id;
   final _FieldType type;
   String label;
   bool required;
   List<String> options;
+  List<String> allowedRoles;
 
   bool get hasOptions =>
       type.label == 'Dropdown' ||
@@ -137,6 +140,9 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
           options: (data['options'] as List<dynamic>? ?? [])
               .map((e) => e.toString())
               .toList(),
+          allowedRoles: (data['allowedRoles'] as List<dynamic>? ?? ['cold', 'warm'])
+              .map((e) => e.toString())
+              .toList(),
         ));
       }
 
@@ -178,6 +184,7 @@ class _FormBuilderContentState extends State<FormBuilderContent> {
           'options': f.options,
           'required': f.required,
           'order': i,
+          'allowedRoles': f.allowedRoles,
         });
       }
 
@@ -652,6 +659,35 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
     );
   }
 
+  // ── Role selector helper ───────────────────
+  void _setRoles(List<String> roles) {
+    setState(() => widget.field.allowedRoles = roles);
+  }
+
+  Widget _roleChip(String label, List<String> roles) {
+    final active = widget.field.allowedRoles.length == roles.length &&
+        widget.field.allowedRoles.toSet().containsAll(roles);
+    return GestureDetector(
+      onTap: () => _setRoles(roles),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: active ? _kBlue : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: _inter(
+            11,
+            weight: FontWeight.w600,
+            color: active ? Colors.white : _kGrey,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -785,6 +821,36 @@ class _CanvasFieldCardState extends State<_CanvasFieldCard> {
 
                   // ── Delete button ──────────────
                   _DeleteBtn(onTap: widget.onRemove),
+                ],
+              ),
+
+              // ── Role selector ──────────────────────────
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.people_alt_outlined, size: 13, color: _kGrey),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Visible to:',
+                    style: _inter(11, color: _kGrey),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: _kBgPage,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: _kBorder),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _roleChip('Both', ['cold', 'warm']),
+                        _roleChip('Cold Only', ['cold']),
+                        _roleChip('Warm Only', ['warm']),
+                      ],
+                    ),
+                  ),
                 ],
               ),
 

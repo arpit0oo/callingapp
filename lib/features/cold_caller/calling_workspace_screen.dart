@@ -657,7 +657,12 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
           );
         }
 
-        final docs = snapshot.data?.docs ?? [];
+        final allDocs = snapshot.data?.docs ?? [];
+        final docs = allDocs.where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          final allowedRoles = data['allowedRoles'] as List<dynamic>? ?? ['cold', 'warm'];
+          return allowedRoles.contains(AppSession.role);
+        }).toList();
 
         if (docs.isEmpty) {
           return _Card(
@@ -1081,7 +1086,12 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                 );
               }
 
-              final docs = snapshot.data?.docs ?? [];
+              final allDocs = snapshot.data?.docs ?? [];
+              final docs = allDocs.where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                final allowedRoles = data['allowedRoles'] as List<dynamic>? ?? ['cold', 'warm'];
+                return allowedRoles.contains(AppSession.role);
+              }).toList();
 
               if (docs.isEmpty) {
                 return Padding(
