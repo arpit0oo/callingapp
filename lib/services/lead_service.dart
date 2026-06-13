@@ -13,12 +13,13 @@ class LeadService {
       String tenantId,
       String campaignId,
       String callerId,
-      {String role = 'cold_caller'}) async {
+      {String role = 'cold_caller', String? queuePreference}) async {
 
     // ── Warm-caller path: pull from warm_numbers buckets ──────────────────
     if (role == AppRoles.warmCaller) {
-      // Try callback bucket first, fall back to retry bucket.
-      for (final bucket in ['callback', 'retry']) {
+      // If queuePreference is set, only try that bucket; otherwise fall back callback → retry.
+      final bucketsToTry = queuePreference != null ? [queuePreference] : ['callback', 'retry'];
+      for (final bucket in bucketsToTry) {
         final bucketRef =
             FirestoreService.warmNumbersDoc(tenantId, campaignId, bucket);
         final snap = await bucketRef.get();

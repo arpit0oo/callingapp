@@ -65,6 +65,8 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
   // ── Current lead ──────────────────────────────────────────────
   Map<String, dynamic>? _currentLead;
   bool _fetchingLead = false;
+  /// Active queue bucket for warm callers: 'callback' or 'retry'.
+  String _queuePreference = 'callback';
 
   // ── Stop state ────────────────────────────────────────────────
   bool _stopping = false;
@@ -178,6 +180,7 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
         AppSession.campaignId,
         AppSession.userId,
         role: AppSession.role,
+        queuePreference: widget.role == AppRoles.warmCaller ? _queuePreference : null,
       );
       if (!mounted) return;
 
@@ -630,10 +633,59 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
       // Lead already locked — show Open Workspace button
       return _buildOpenWorkspaceButton();
     }
-    return _GetNextLeadButton(
-      role: widget.role,
-      loading: _fetchingLead,
-      onTap: _handleGetNextLead,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.role == AppRoles.warmCaller) ...[
+          _buildQueueSelector(),
+          const SizedBox(height: 12),
+        ],
+        _GetNextLeadButton(
+          role: widget.role,
+          queuePreference: _queuePreference,
+          loading: _fetchingLead,
+          onTap: _handleGetNextLead,
+        ),
+      ],
+    );
+  }
+
+  // ── Queue selector (warm callers only) ───────────────────────
+  Widget _buildQueueSelector() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _QueueChip(
+              label: 'Callbacks',
+              icon: Icons.phone_callback_outlined,
+              selected: _queuePreference == 'callback',
+              onTap: () => setState(() => _queuePreference = 'callback'),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: _QueueChip(
+              label: 'Retries',
+              icon: Icons.replay_outlined,
+              selected: _queuePreference == 'retry',
+              onTap: () => setState(() => _queuePreference = 'retry'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -774,11 +826,14 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
 class _GetNextLeadButton extends StatefulWidget {
   const _GetNextLeadButton({
     required this.role,
+    required this.queuePreference,
     required this.loading,
     required this.onTap,
   });
 
   final String role;
+  /// Used to display 'Get Next Callback' or 'Get Next Retry' for warm callers.
+  final String queuePreference;
   final bool loading;
   final VoidCallback onTap;
 
@@ -834,8 +889,8 @@ class _GetNextLeadButtonState extends State<_GetNextLeadButton> {
                       color: Colors.white, strokeWidth: 2.5),
                 )
               : Text(
-                  widget.role == 'warm'
-                      ? 'Get Next Callback →'
+                  widget.role == AppRoles.warmCaller
+                      ? 'Get Next ${widget.queuePreference == 'callback' ? 'Callback' : 'Retry'} →'
                       : 'Get Next Lead →',
                   style: GoogleFonts.inter(
                     fontSize: 18,
@@ -910,6 +965,61 @@ class _StatCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Queue chip (warm-caller selector)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _QueueChip extends StatelessWidget {
+  const _QueueChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  static const _primary = Color(0xFF1A73E8);
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          color: selected ? _primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected ? Colors.white : const Color(0xFF9AA0A6),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : const Color(0xFF5F6368),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
