@@ -716,13 +716,27 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
                 color: Colors.white.withOpacity(0.65),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Text(
-                notes,
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  color: const Color(0xFF3C4043),
-                  height: 1.45,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Notes:',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF9AA0A6),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    notes,
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: const Color(0xFF3C4043),
+                      height: 1.45,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -760,6 +774,59 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
               },
             ),
           ],
+
+          // ── Previous form data (read-only) ────────────────────────
+          Builder(builder: (_) {
+            final prevFd = (contextData['formData'] as Map<String, dynamic>?)
+                ?.entries
+                .where((e) => e.value?.toString().isNotEmpty == true)
+                .toList();
+            if (prevFd == null || prevFd.isEmpty) return const SizedBox.shrink();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: prevFd.map((e) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${e.key}: ',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF9AA0A6),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                e.value?.toString() ?? '',
+                                style: GoogleFonts.inter(
+                                  fontSize: 12,
+                                  color: const Color(0xFF3C4043),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            );
+          }),
         ],
       ),
     );
@@ -828,44 +895,6 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
               ],
             ),
           );
-        }
-
-        // Build a label→docId reverse map so the prefill block can resolve
-        // _formControllers entries (keyed by doc ID) from formData keys (keyed by label).
-        final Map<String, String> labelToFieldId = {};
-        for (final doc in docs) {
-          final d = doc.data() as Map<String, dynamic>;
-          final lbl = d['label']?.toString() ?? doc.id;
-          labelToFieldId[lbl] = doc.id;
-        }
-
-        // ── Auto-fill from previous context (warm callers only) ───
-        // Runs after the first frame so all _formControllers from
-        // putIfAbsent calls below are guaranteed to exist.
-        if (AppSession.role == AppRoles.warmCaller) {
-          final h = widget.currentLead?['history'] as List<dynamic>? ?? [];
-          if (h.isNotEmpty) {
-            final prevFormData =
-                (h.last as Map<String, dynamic>)['formData']
-                    as Map<String, dynamic>?;
-            if (prevFormData != null) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) return;
-                bool changed = false;
-                prevFormData.forEach((key, value) {
-                  final val = value?.toString() ?? '';
-                  final fieldId = labelToFieldId[key];
-                  final ctrl = fieldId != null ? _formControllers[fieldId] : null;
-                  if (ctrl != null && ctrl.text.isEmpty && val.isNotEmpty) {
-                    ctrl.text = val;
-                    _formData[key] = val;
-                    changed = true;
-                  }
-                });
-                if (changed && mounted) setState(() {});
-              });
-            }
-          }
         }
 
         return _Card(
