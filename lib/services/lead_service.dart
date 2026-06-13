@@ -117,6 +117,14 @@ class LeadService {
   }
 
   // ── Submit disposition after call ─────────────────────────────────────────
+  //
+  // Routing Table for Dispositions:
+  // - 'convert', 'close', 'info': No queue routing. Marks lead status.
+  // - 'callback': Pushes phone to warm_numbers/callback bucket for warm follow-up.
+  // - 'retry': Pushes phone to warm_numbers/retry bucket for warm follow-up.
+  // - 'dnc': Suppresses the phone number globally (adds to suppression_list).
+  //
+  // Regardless of dispositionType, the lead document is updated with status = dispositionType.
 
   static Future<void> submitDisposition(
       String tenantId,
@@ -127,12 +135,12 @@ class LeadService {
       Map<String, dynamic> extraData) async {
     final db = FirebaseFirestore.instance;
 
-    // Always mark lead as disposed.
-    await FirestoreService.leadsCol(tenantId, campaignId).doc(phone).update({
+    // Always update/create lead document in campaign.
+    await FirestoreService.leadsCol(tenantId, campaignId).doc(phone).set({
       ...data,
-      'status': 'disposed',
+      'status': dispositionType,
       'updatedAt': FieldValue.serverTimestamp(),
-    });
+    }, SetOptions(merge: true));
 
     if (dispositionType == 'callback') {
       // ── Queue for warm caller follow-up ──────────────────────────────────
@@ -141,8 +149,8 @@ class LeadService {
               SetOptions(merge: true));
 
     } else if (dispositionType == 'retry') {
-      // ── Re-queue for cold caller ──────────────────────────────────────────
-      await FirestoreService.rawNumbersDoc(tenantId, campaignId, 'unfiltered')
+      // ── Queue for warm caller retry follow-up ─────────────────────────────
+      await FirestoreService.warmNumbersDoc(tenantId, campaignId, 'retry')
           .set({'numbers': FieldValue.arrayUnion([phone])},
               SetOptions(merge: true));
 
