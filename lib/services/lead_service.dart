@@ -118,6 +118,18 @@ class LeadService {
       Map<String, dynamic> extraData) async {
     final db = FirebaseFirestore.instance;
 
+    // Build history entry.
+    // NOTE: Timestamp.fromDate is used intentionally — FieldValue.serverTimestamp()
+    // is not permitted inside array elements by Firestore.
+    final historyEntry = {
+      'dispositionLabel': data['dispositionLabel'],
+      'dispositionType': dispositionType,
+      'notes': data['notes'],
+      'formData': Map<String, dynamic>.from(data['formData'] ?? {}),
+      'by': extraData['addedBy'] ?? '',
+      'at': Timestamp.fromDate(DateTime.now()),
+    };
+
     // Always update/create lead document in campaign.
     await FirestoreService.leadsCol(tenantId, campaignId).doc(phone).set({
       ...data,
@@ -125,6 +137,7 @@ class LeadService {
       'updatedAt': FieldValue.serverTimestamp(),
       if (dispositionType == 'callback' && extraData['scheduledAt'] != null)
         'scheduledCallbackAt': extraData['scheduledAt'],
+      'history': FieldValue.arrayUnion([historyEntry]),
     }, SetOptions(merge: true));
 
     if (dispositionType == 'callback') {
