@@ -56,16 +56,7 @@ class LeadService {
           await leadRef.set(leadData);
         }
 
-        // Decrement queue counter on the campaign stats document.
-        await FirebaseFirestore.instance
-            .collection('tenants')
-            .doc(tenantId)
-            .collection('campaigns')
-            .doc(campaignId)
-            .collection('stats')
-            .doc('summary')
-            .set({'queueRemaining': FieldValue.increment(-1)},
-                SetOptions(merge: true));
+
 
         return {'id': phone, ...leadData};
       }
@@ -103,16 +94,7 @@ class LeadService {
       'attempts': FieldValue.increment(1),
     }, SetOptions(merge: true));
 
-    // Decrement queue counter on the campaign stats document.
-    await FirebaseFirestore.instance
-        .collection('tenants')
-        .doc(tenantId)
-        .collection('campaigns')
-        .doc(campaignId)
-        .collection('stats')
-        .doc('summary')
-        .set({'queueRemaining': FieldValue.increment(-1)},
-            SetOptions(merge: true));
+
 
     return {'id': phone, 'phone': phone};
   }

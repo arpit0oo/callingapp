@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../services/app_session.dart';
+import '../../services/firestore_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/rtdb_service.dart';
 import 'caller_shell.dart';
@@ -521,35 +522,94 @@ class _CallingDashboardContentState extends State<CallingDashboardContent> {
           ),
         ),
         const SizedBox(width: 12),
-        // Queue count from Firestore stats/summary
-        Expanded(
-          child: StreamBuilder<DocumentSnapshot>(
-            stream: AppSession.campaignId.isEmpty
-                ? null
-                : FirebaseFirestore.instance
-                    .collection('tenants')
-                    .doc(AppSession.tenantId)
-                    .collection('campaigns')
-                    .doc(AppSession.campaignId)
-                    .collection('stats')
-                    .doc('summary')
-                    .snapshots(),
-            builder: (context, snap) {
-              String queueVal = '—';
-              if (snap.hasData && snap.data!.exists) {
-                final data = snap.data!.data() as Map<String, dynamic>? ?? {};
-                final q = data['queueRemaining'];
-                if (q != null) queueVal = '$q';
-              }
-              return _StatCard(
-                icon: Icons.queue_outlined,
-                iconColor: _green,
-                value: queueVal,
-                label: 'Queue Remaining',
-              );
-            },
+        // Queue count from Firestore based on role
+        if (widget.role == AppRoles.coldCaller)
+          Expanded(
+            child: StreamBuilder<DocumentSnapshot>(
+              stream: AppSession.campaignId.isEmpty
+                  ? null
+                  : FirestoreService.rawNumbersDoc(
+                      AppSession.tenantId,
+                      AppSession.campaignId,
+                      'unfiltered',
+                    ).snapshots(),
+              builder: (context, snap) {
+                String queueVal = '—';
+                if (snap.hasData) {
+                  if (snap.data!.exists) {
+                    final data = snap.data!.data() as Map<String, dynamic>? ?? {};
+                    final list = data['numbers'] as List<dynamic>?;
+                    queueVal = '${list?.length ?? 0}';
+                  } else {
+                    queueVal = '0';
+                  }
+                }
+                return _StatCard(
+                  icon: Icons.queue_outlined,
+                  iconColor: _green,
+                  value: queueVal,
+                  label: 'Queue Remaining',
+                );
+              },
+            ),
+          )
+        else if (widget.role == AppRoles.warmCaller)
+          Expanded(
+            child: StreamBuilder<DocumentSnapshot>(
+              stream: AppSession.campaignId.isEmpty
+                  ? null
+                  : FirestoreService.warmNumbersDoc(
+                      AppSession.tenantId,
+                      AppSession.campaignId,
+                      'callback',
+                    ).snapshots(),
+              builder: (context, callbackSnap) {
+                return StreamBuilder<DocumentSnapshot>(
+                  stream: AppSession.campaignId.isEmpty
+                      ? null
+                      : FirestoreService.warmNumbersDoc(
+                          AppSession.tenantId,
+                          AppSession.campaignId,
+                          'retry',
+                        ).snapshots(),
+                  builder: (context, retrySnap) {
+                    String queueVal = '—';
+                    if (callbackSnap.hasData && retrySnap.hasData) {
+                      int cbLen = 0;
+                      int retryLen = 0;
+
+                      if (callbackSnap.data!.exists) {
+                        final cbData = callbackSnap.data!.data() as Map<String, dynamic>? ?? {};
+                        cbLen = (cbData['numbers'] as List<dynamic>?)?.length ?? 0;
+                      }
+                      if (retrySnap.data!.exists) {
+                        final retryData = retrySnap.data!.data() as Map<String, dynamic>? ?? {};
+                        retryLen = (retryData['numbers'] as List<dynamic>?)?.length ?? 0;
+                      }
+
+                      queueVal = '${cbLen + retryLen}';
+                    }
+
+                    return _StatCard(
+                      icon: Icons.queue_outlined,
+                      iconColor: _green,
+                      value: queueVal,
+                      label: 'Queue Remaining',
+                    );
+                  },
+                );
+              },
+            ),
+          )
+        else
+          Expanded(
+            child: _StatCard(
+              icon: Icons.queue_outlined,
+              iconColor: _green,
+              value: '—',
+              label: 'Queue Remaining',
+            ),
           ),
-        ),
         const SizedBox(width: 12),
         Expanded(
           child: _StatCard(
