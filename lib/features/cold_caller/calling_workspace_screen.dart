@@ -279,6 +279,22 @@ class _CallingWorkspaceContentState extends State<CallingWorkspaceContent> {
       return;
     }
 
+    // ── Callback validation ────────────────────────────────────
+    if (_selectedDispositionRequiresCallback &&
+        (_cbDate == null || _cbTime == null)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select a callback date and time'),
+            backgroundColor: Color(0xFFD93025),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
     // Clear any previous error highlights before submitting
     if (_notesError) setState(() => _notesError = false);
     if (_invalidFieldIds.isNotEmpty) {

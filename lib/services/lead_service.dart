@@ -140,6 +140,8 @@ class LeadService {
       ...data,
       'status': dispositionType,
       'updatedAt': FieldValue.serverTimestamp(),
+      if (dispositionType == 'callback' && extraData['scheduledAt'] != null)
+        'scheduledCallbackAt': extraData['scheduledAt'],
     }, SetOptions(merge: true));
 
     if (dispositionType == 'callback') {
