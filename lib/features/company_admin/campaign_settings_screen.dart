@@ -37,12 +37,14 @@ class _Disposition {
     this.requiresNote = false,
     this.callback = false,
     this.type = 'close',
+    this.allowedRoles = const ['cold', 'warm'],
   });
   final String label;
   final Color color;
   bool requiresNote;
   bool callback;
   String type;
+  List<String> allowedRoles;
 }
 
 // ─────────────────────────────────────────────
@@ -72,6 +74,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
   final _newLabelCtrl = TextEditingController();
   Color _newColor = _kGreen;
   String _newType = 'close';
+  List<String> _newAllowedRoles = ['cold', 'warm'];
 
   // Retry Logic
   int _maxRetries = 3;
@@ -136,12 +139,17 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
       final loaded = dispSnap.docs.map((doc) {
         final d = doc.data();
         final colorVal = (d['color'] as num?)?.toInt() ?? _kGrey.value;
+        final rawRoles = d['allowedRoles'];
+        final allowedRoles = (rawRoles is List && rawRoles.isNotEmpty)
+            ? rawRoles.cast<String>()
+            : ['cold', 'warm'];
         return _Disposition(
           label: d['label'] as String? ?? doc.id,
           color: Color(colorVal),
           requiresNote: d['requiresNote'] as bool? ?? false,
           callback: d['requiresCallback'] as bool? ?? false,
           type: d['type'] as String? ?? 'close',
+          allowedRoles: allowedRoles,
         );
       }).toList();
       setState(() => _dispositions = loaded);
@@ -195,6 +203,7 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
         'requiresCallback': disp.callback,
         'type':             disp.type,
         'order':            i,
+        'allowedRoles':     disp.allowedRoles,
       });
     }
     await batch.commit();
@@ -256,10 +265,12 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
               newLabelCtrl: _newLabelCtrl,
               newColor: _newColor,
               newType: _newType,
+              newAllowedRoles: _newAllowedRoles,
               availableColors: _dotColors,
               onAddTap: () => setState(() => _showAddForm = !_showAddForm),
               onColorPick: (c) => setState(() => _newColor = c),
               onTypePick: (t) => setState(() => _newType = t),
+              onRolesPick: (r) => setState(() => _newAllowedRoles = r),
               onAddConfirm: () {
                 if (_newLabelCtrl.text.trim().isNotEmpty) {
                   setState(() {
@@ -267,9 +278,11 @@ class _CampaignSettingsContentState extends State<CampaignSettingsContent> {
                       label: _newLabelCtrl.text.trim(),
                       color: _newColor,
                       type: _newType,
+                      allowedRoles: List.from(_newAllowedRoles),
                     ));
                     _newLabelCtrl.clear();
                     _newType = 'close';
+                    _newAllowedRoles = ['cold', 'warm'];
                     _showAddForm = false;
                   });
                 }
@@ -325,10 +338,12 @@ class _DispositionCard extends StatelessWidget {
     required this.newLabelCtrl,
     required this.newColor,
     required this.newType,
+    required this.newAllowedRoles,
     required this.availableColors,
     required this.onAddTap,
     required this.onColorPick,
     required this.onTypePick,
+    required this.onRolesPick,
     required this.onAddConfirm,
     required this.onToggleNote,
     required this.onToggleCallback,
@@ -341,10 +356,12 @@ class _DispositionCard extends StatelessWidget {
   final TextEditingController newLabelCtrl;
   final Color newColor;
   final String newType;
+  final List<String> newAllowedRoles;
   final List<Color> availableColors;
   final VoidCallback onAddTap;
   final ValueChanged<Color> onColorPick;
   final ValueChanged<String> onTypePick;
+  final ValueChanged<List<String>> onRolesPick;
   final VoidCallback onAddConfirm;
   final ValueChanged<int> onToggleNote;
   final ValueChanged<int> onToggleCallback;
@@ -480,6 +497,28 @@ class _DispositionCard extends StatelessWidget {
                   ),
                 ),
               ]),
+              const SizedBox(height: 10),
+              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                Text('Roles: ', style: _inter(12, color: _kTextLight)),
+                const SizedBox(width: 8),
+                _RoleChip(
+                  label: 'Both',
+                  selected: newAllowedRoles.contains('cold') && newAllowedRoles.contains('warm'),
+                  onTap: () => onRolesPick(['cold', 'warm']),
+                ),
+                const SizedBox(width: 6),
+                _RoleChip(
+                  label: 'Cold Only',
+                  selected: newAllowedRoles.length == 1 && newAllowedRoles.contains('cold'),
+                  onTap: () => onRolesPick(['cold']),
+                ),
+                const SizedBox(width: 6),
+                _RoleChip(
+                  label: 'Warm Only',
+                  selected: newAllowedRoles.length == 1 && newAllowedRoles.contains('warm'),
+                  onTap: () => onRolesPick(['warm']),
+                ),
+              ]),
             ]),
           ),
         ],
@@ -538,12 +577,54 @@ class _DispositionRowState extends State<_DispositionRow> {
         color: _hovered ? _kBgPage : Colors.white,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: Row(children: [
-          // Dot + label
+          // Dot + label + badges
           Container(width: 10, height: 10,
               decoration: BoxDecoration(color: widget.disposition.color, shape: BoxShape.circle)),
           const SizedBox(width: 10),
-          Expanded(child: Text(widget.disposition.label,
-              style: _inter(13, weight: FontWeight.w500))),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(widget.disposition.label,
+                    style: _inter(13, weight: FontWeight.w500)),
+                const SizedBox(height: 4),
+                Row(children: [
+                  // Behavior badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F3F4),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      widget.disposition.type.toUpperCase(),
+                      style: _inter(9, weight: FontWeight.w600, color: _kTextLight),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  // Roles badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F0FE),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      () {
+                        final r = widget.disposition.allowedRoles;
+                        if (r.contains('cold') && r.contains('warm')) return 'BOTH';
+                        if (r.contains('cold')) return 'COLD ONLY';
+                        if (r.contains('warm')) return 'WARM ONLY';
+                        return 'NONE';
+                      }(),
+                      style: _inter(9, weight: FontWeight.w600, color: _kBlue),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
           // Note toggle
           SizedBox(
             width: 70,
@@ -609,6 +690,47 @@ class _DelBtnState extends State<_DelBtn> {
           ),
           child: Icon(Icons.delete_outline, size: 17,
               color: _hov ? _kRed : _kGrey),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Role selector chip
+// ─────────────────────────────────────────────
+class _RoleChip extends StatelessWidget {
+  const _RoleChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? _kBlue : _kBgPage,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? _kBlue : _kBorder,
+            width: 1.2,
+          ),
+        ),
+        child: Text(
+          label,
+          style: _inter(
+            11,
+            weight: FontWeight.w600,
+            color: selected ? Colors.white : _kTextLight,
+          ),
         ),
       ),
     );
